@@ -1,0 +1,23 @@
+{
+  "name": "sentiql",
+  "version": "1.0.0",
+  "description": "Governed PostgreSQL MCP server and audit console for Codex.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env src/server.mjs",
+    "dashboard": "node --env-file-if-exists=.env dashboard/server.mjs",
+    "test": "node --test"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "express": "^5.2.1",
+    "pg": "^8.16.3",
+    "zod": "^4.4.3"
+  }
+}

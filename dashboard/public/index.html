@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>SentiQL Audit Console</title>
+    <style>
+      :root { color-scheme: dark; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      * { box-sizing: border-box; }
+      body { margin: 0; background: #090c10; color: #d7e0e8; }
+      header { position: sticky; top: 0; display: flex; justify-content: space-between; gap: 1rem; padding: 1rem 1.25rem; background: #10161d; border-bottom: 1px solid #2b3946; }
+      h1 { margin: 0; font-size: 1rem; letter-spacing: .06em; color: #e7f4ff; }
+      #status { color: #88a2b8; font-size: .8rem; }
+      main { max-width: 1200px; margin: 0 auto; padding: 1.25rem; }
+      .entry { display: grid; grid-template-columns: 12rem 5.75rem minmax(12rem, 2fr) minmax(12rem, 1.5fr) minmax(8rem, 1fr); gap: .75rem; align-items: start; padding: .9rem 0; border-bottom: 1px solid #1b2834; font-size: .85rem; }
+      .entry-label { display: none; color: #88a2b8; }
+      .badge { display: inline-block; width: fit-content; padding: .2rem .45rem; border: 1px solid currentColor; border-radius: 2px; font-size: .75rem; font-weight: 700; text-transform: uppercase; }
+      .allow { color: #79d69c; } .deny { color: #ffae72; } .error { color: #ff7d8a; }
+      .value { white-space: pre-wrap; overflow-wrap: anywhere; }
+      .empty { color: #88a2b8; padding: 2rem 0; }
+      @media (max-width: 760px) { .entry { grid-template-columns: 1fr; gap: .25rem; } .entry-label { display: inline; margin-right: .5rem; } }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>SENTIQL / AUDIT CONSOLE</h1>
+      <div id="status">connecting…</div>
+    </header>
+    <main id="entries" aria-live="polite"></main>
+    <script>
+      const container = document.getElementById('entries');
+      const status = document.getElementById('status');
+      const fields = [
+        ['timestamp', 'TIME'],
+        ['decision', 'DECISION'],
+        ['sql', 'QUERY'],
+        ['reason', 'REASON'],
+        ['sessionId', 'SESSION'],
+      ];
+
+      function element(tag, className, value) {
+        const node = document.createElement(tag);
+        if (className) node.className = className;
+        if (value !== undefined) node.textContent = value;
+        return node;
+      }
+
+      function render(entries) {
+        container.replaceChildren();
+        if (!entries.length) {
+          container.append(element('p', 'empty', 'No audit entries recorded.'));
+          return;
+        }
+        for (const entry of entries) {
+          const row = element('article', 'entry');
+          for (const [key, label] of fields) {
+            const cell = element('div', 'value');
+            cell.append(element('span', 'entry-label', `${label}:`));
+            if (key === 'decision') {
+              const decision = ['allow', 'deny', 'error'].includes(entry.decision) ? entry.decision : 'error';
+              cell.append(element('span', `badge ${decision}`, decision));
+            } else {
+              const value = entry[key] == null || entry[key] === '' ? '—' : String(entry[key]);
+              cell.append(document.createTextNode(value));
+            }
+            row.append(cell);
+          }
+          container.append(row);
+        }
+      }
+
+      async function refresh() {
+        try {
+          const response = await fetch('/api/audit', { cache: 'no-store' });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          const payload = await response.json();
+          render(Array.isArray(payload.entries) ? payload.entries : []);
+          status.textContent = `updated ${new Date().toLocaleTimeString()}`;
+        } catch {
+          status.textContent = 'audit feed unavailable';
+        }
+      }
+
+      refresh();
+      setInterval(refresh, 2000);
+    </script>
+  </body>
+</html>
