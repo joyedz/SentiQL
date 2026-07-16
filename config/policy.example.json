@@ -1,0 +1,66 @@
+{
+  "version": "2026-07-17.1",
+  "identity": {
+    "issuers": [
+      {
+        "issuer": "https://identity.example.com",
+        "audience": "sentiql",
+        "jwksUrl": "https://identity.example.com/.well-known/jwks.json"
+      }
+    ],
+    "claims": {
+      "organization": "organization",
+      "tenant": "tenant",
+      "roles": "roles"
+    }
+  },
+  "resources": {
+    "crm.support_cases": {
+      "schema": "crm",
+      "table": "support_cases",
+      "tenantColumn": "tenant_id",
+      "fields": {
+        "readable": ["id", "status", "priority", "assignee_id", "created_at"],
+        "aggregatable": ["priority"],
+        "writable": ["status", "assignee_id"]
+      },
+      "selectors": ["id", "status"],
+      "mutations": {
+        "set_status": {
+          "fields": ["status"],
+          "maxRows": 1
+        }
+      }
+    }
+  },
+  "grants": [
+    {
+      "subject": "role:support-agent",
+      "capability": "schema.discover",
+      "resource": "crm.support_cases",
+      "purposes": ["customer_support"],
+      "rowScope": "tenant",
+      "maxRows": 100
+    },
+    {
+      "subject": "role:support-agent",
+      "capability": "data.read",
+      "resource": "crm.support_cases",
+      "purposes": ["customer_support"],
+      "rowScope": "tenant",
+      "maxRows": 100
+    },
+    {
+      "subject": "role:support-agent",
+      "capability": "data.mutate",
+      "resource": "crm.support_cases",
+      "purposes": ["customer_support"],
+      "rowScope": "tenant",
+      "maxRows": 1,
+      "mutationActions": ["set_status"],
+      "approval": {
+        "requiredWhen": { "field": "status", "equals": "escalated" }
+      }
+    }
+  ]
+}
