@@ -9,6 +9,7 @@
   "scripts": {
     "start": "node --env-file-if-exists=.env src/server.mjs",
     "dashboard": "node --env-file-if-exists=.env dashboard/server.mjs",
+    "policy:simulate": "node bin/policy-simulate.mjs",
     "test": "node --test"
   },
   "keywords": [],
