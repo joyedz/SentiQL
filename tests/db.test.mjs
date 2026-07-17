@@ -84,3 +84,51 @@ test('closes the underlying pool', async () => {
   await database.close();
   assert.equal(closed, true);
 });
+
+test('executes compiled requests only after RLS context setup', async () => {
+  const calls = [];
+  const client = {
+    async query(text, values) {
+      calls.push([text, values]);
+      return { rows: [], command: 'SELECT', rowCount: 0 };
+    },
+    release() { calls.push(['RELEASE']); },
+  };
+  const database = createDatabase({
+    mode: 'read-only',
+    pool: { connect: async () => client, end: async () => {} },
+  });
+  const result = await database.executeCompiled({ command: 'read', text: 'SELECT "id" FROM "crm"."support_cases" LIMIT $1', values: [2] }, { subject: 'user-1', organization: 'org-1', tenantId: 'tenant-1' });
+  assert.equal(result.command, 'SELECT');
+  assert.deepEqual(calls.map(([sql]) => sql), [
+    'BEGIN', 'SET TRANSACTION READ ONLY', "SELECT set_config('app.subject', $1, true)", "SELECT set_config('app.organization', $1, true)", "SELECT set_config('app.tenant_id', $1, true)", 'SELECT "id" FROM "crm"."support_cases" LIMIT $1', 'COMMIT', 'RELEASE',
+  ]);
+});
+
+test('rolls back when RLS setup or mutation row limit fails', async () => {
+  const calls = [];
+  const client = {
+    async query(text) {
+      calls.push(text);
+      if (text.includes('app.organization')) throw new Error('context failed');
+      return { command: 'SELECT', rowCount: 0 };
+    },
+    release() { calls.push('RELEASE'); },
+  };
+  const database = createDatabase({ mode: 'read-only', pool: { connect: async () => client, end: async () => {} } });
+  await assert.rejects(database.executeCompiled({ command: 'read', text: 'SELECT 1', values: [] }, { subject: 's', organization: 'o', tenantId: 't' }), /execution failed/);
+  assert.deepEqual(calls, ['BEGIN', 'SET TRANSACTION READ ONLY', "SELECT set_config('app.subject', $1, true)", "SELECT set_config('app.organization', $1, true)", 'ROLLBACK', 'RELEASE']);
+
+  const mutateCalls = [];
+  const mutateClient = {
+    async query(text) {
+      mutateCalls.push(text);
+      return { command: text.startsWith('UPDATE') ? 'UPDATE' : 'SELECT', rowCount: text.startsWith('UPDATE') ? 2 : 0 };
+    },
+    release() { mutateCalls.push('RELEASE'); },
+  };
+  const mutateDb = createDatabase({ mode: 'read-write', pool: { connect: async () => mutateClient, end: async () => {} } });
+  await assert.rejects(mutateDb.executeCompiled({ command: 'mutate', text: 'UPDATE "crm"."support_cases" SET "status" = $1 WHERE "id" = $2', values: ['x', 'case-1'], maxRows: 1 }, { subject: 's', organization: 'o', tenantId: 't' }), /row limit/i);
+  assert.equal(mutateCalls.at(-2), 'ROLLBACK');
+  assert.equal(mutateCalls.at(-1), 'RELEASE');
+});
