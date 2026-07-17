@@ -61,7 +61,7 @@ flowchart LR
 
 The MCP server boundary is the enforcement point: every database request sent through this MCP tool must be evaluated and audited before it can reach PostgreSQL. A Codex `PreToolUse` hook is not a substitute, because hooks do not reliably cover MCP tool calls.
 
-Typed reads and aggregates start a transaction and issue `SET TRANSACTION READ ONLY` before setting the verified RLS context. Raw compatibility queries (when explicitly enabled) use `BEGIN READ ONLY`. In production, use a PostgreSQL credential with a read-only database role as well. The database role and transaction are defense in depth if policy parsing is bypassed or a side-effecting `SELECT` function is attempted; policy validation remains the first boundary.
+Typed reads and aggregates start a transaction and issue `SET TRANSACTION READ ONLY` before setting the verified RLS context. Raw compatibility queries (when explicitly enabled) also require a verified OIDC principal, start `BEGIN`, set the transaction read-only mode when configured, and establish the transaction-local RLS context before executing SQL. The lexical policy rejects context-mutating `set_config` calls so raw SQL cannot replace the verified tenant GUC. In production, use a PostgreSQL credential with a read-only database role as well. The database role and transaction are defense in depth if policy parsing is bypassed or a side-effecting `SELECT` function is attempted; policy validation remains the first boundary.
 
 ## Register with Codex
 
@@ -105,7 +105,7 @@ Agents must not supply or override a subject, organization, tenant, role, or pur
 
 `seed.sql` creates `crm.support_cases`, enables and forces row-level security, and grants only schema usage plus `SELECT`/`UPDATE` to `sentiql_app` (`NOBYPASSRLS`). Before each compiled query the server sets transaction-local `app.subject`, `app.organization`, and `app.tenant_id`; tenant policies compare `tenant_id` with `current_setting('app.tenant_id', true)`. Keep the bootstrap owner separate from application credentials in deployments.
 
-The normal MCP surface is four typed tools: `schema_discover`, `data_read`, `data_aggregate`, and `data_mutate`. Raw `query` compatibility is disabled by default. A deliberate break-glass pilot may set `ENABLE_RAW_QUERY_COMPATIBILITY=true` and must provide a non-empty `RAW_QUERY_BREAK_GLASS_REASON`; every raw call is separately audited. Prefer typed tools and remove the compatibility flag after the pilot.
+The normal MCP surface is four typed tools: `schema_discover`, `data_read`, `data_aggregate`, and `data_mutate`. Raw `query` compatibility is disabled by default. A deliberate break-glass pilot may set `ENABLE_RAW_QUERY_COMPATIBILITY=true` and must provide a non-empty `RAW_QUERY_BREAK_GLASS_REASON`; every raw call still requires OIDC verification, is scoped to the verified principal through PostgreSQL RLS context, and is separately audited with correlation and identity fields. Raw SQL is represented by a SHA-256 digest in the audit trail so sensitive literals are not persisted. Prefer typed tools and remove the compatibility flag after the pilot.
 
 To verify the demo RLS boundary after a fresh bootstrap, inspect the role as the owner and query each tenant through the app role (each command should return only its tenant's two rows):
 

@@ -85,6 +85,53 @@ test('closes the underlying pool', async () => {
   assert.equal(closed, true);
 });
 
+test('executes raw compatibility queries with verified RLS context', async () => {
+  const calls = [];
+  const client = {
+    async query(text, values) {
+      calls.push([text, values]);
+      return { rows: [{ id: 1 }], command: 'SELECT', rowCount: 1 };
+    },
+    release() { calls.push(['RELEASE']); },
+  };
+  const database = createDatabase({
+    mode: 'read-only',
+    pool: { connect: async () => client, end: async () => {} },
+  });
+  const result = await database.executeAllowedQueryWithContext('SELECT id FROM users', {
+    subject: 'user-1', organization: 'org-1', tenantId: 'tenant-1', roles: ['agent'],
+  });
+  assert.equal(result.rowCount, 1);
+  assert.deepEqual(calls.map(([text]) => text), [
+    'BEGIN', 'SET TRANSACTION READ ONLY', "SELECT set_config('app.subject', $1, true)", "SELECT set_config('app.organization', $1, true)", "SELECT set_config('app.tenant_id', $1, true)", 'SELECT id FROM users', 'COMMIT', 'RELEASE',
+  ]);
+});
+
+test('rejects raw compatibility queries with malformed principals before connecting', async () => {
+  let connected = false;
+  const database = createDatabase({ mode: 'read-only', pool: { connect: async () => { connected = true; }, end: async () => {} } });
+  await assert.rejects(database.executeAllowedQueryWithContext('SELECT 1', { subject: 's', organization: 'o', tenantId: 't' }), /principal/i);
+  assert.equal(connected, false);
+});
+
+test('raw compatibility read-write mode keeps the transaction writable while setting RLS context', async () => {
+  const calls = [];
+  const client = {
+    async query(text) {
+      calls.push(text);
+      return { rows: [], command: 'UPDATE', rowCount: 1 };
+    },
+    release() { calls.push('RELEASE'); },
+  };
+  const database = createDatabase({ mode: 'read-write', pool: { connect: async () => client, end: async () => {} } });
+  await database.executeAllowedQueryWithContext('UPDATE users SET name = \'x\' WHERE id = 1', {
+    subject: 'user-1', organization: 'org-1', tenantId: 'tenant-1', roles: ['agent'],
+  });
+  assert.deepEqual(calls, [
+    'BEGIN', "SELECT set_config('app.subject', $1, true)", "SELECT set_config('app.organization', $1, true)", "SELECT set_config('app.tenant_id', $1, true)", "UPDATE users SET name = 'x' WHERE id = 1", 'COMMIT', 'RELEASE',
+  ]);
+});
+
 test('executes compiled requests only after RLS context setup', async () => {
   const calls = [];
   const client = {

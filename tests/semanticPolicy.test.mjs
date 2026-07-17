@@ -189,6 +189,16 @@ test('rejects tenant scope fields, polluted grant subjects, and non-finite value
   assert.match(authorizeCapabilityRequest(nonFinite, principal, policy).reason, /scalar/i);
 });
 
+test('rejects unsupported grant row scopes instead of silently falling back to tenant RLS', () => {
+  const unsupportedScope = structuredClone(policy);
+  unsupportedScope.grants.find((grant) => grant.capability === 'data.read').rowScope = 'global';
+  const result = authorizeCapabilityRequest({
+    capability: 'data.read', resource: 'crm.support_cases', purpose: 'customer_support', fields: ['id'],
+  }, principal, unsupportedScope);
+  assert.equal(result.decision, 'deny');
+  assert.match(result.reason, /grant|policy/i);
+});
+
 test('requires own resource metadata keys despite prototype properties', () => {
   const inherited = structuredClone(policy);
   delete inherited.resources['crm.support_cases'].fields.readable;

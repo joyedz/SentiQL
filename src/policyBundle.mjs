@@ -78,7 +78,7 @@ const grantSchema = z
     capability: z.enum(['schema.discover', 'data.read', 'data.aggregate', 'data.mutate']),
     resource: nonEmptyString,
     purposes: uniqueStrings,
-    rowScope: nonEmptyString,
+    rowScope: z.literal('tenant'),
     maxRows: z.number().int().positive().optional(),
     mutationActions: uniqueIdentifiers.optional(),
     fields: grantFieldsSchema.optional(),

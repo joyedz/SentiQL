@@ -138,7 +138,7 @@ function grantsFor(policy, request, principal, resource) {
 function validGrantShape(grant, resource) {
   if (!hasOnlyKeys(grant, new Set(['subject', 'capability', 'resource', 'purposes', 'rowScope', 'maxRows', 'mutationActions', 'approval', 'fields']), ['subject', 'capability', 'resource', 'purposes', 'rowScope'])) return false;
   if (!nonEmptyString(grant.subject) || !CAPABILITIES.has(grant.capability) || !nonEmptyString(grant.resource) || !stringArray(grant.purposes, { nonEmpty: true })) return false;
-  if (!nonEmptyString(grant.rowScope)) return false;
+  if (grant.rowScope !== 'tenant') return false;
   if (Object.hasOwn(grant, 'maxRows') && (!Number.isInteger(grant.maxRows) || grant.maxRows <= 0)) return false;
   if (Object.hasOwn(grant, 'mutationActions') && (!stringArray(grant.mutationActions, { nonEmpty: true, identifiers: true }) || grant.capability !== 'data.mutate')) return false;
   if (grant.capability === 'data.mutate' && (!Object.hasOwn(grant, 'mutationActions') || !stringArray(grant.mutationActions, { nonEmpty: true, identifiers: true }))) return false;

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
@@ -17,6 +17,10 @@ const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 function errorMessage(error) {
   return error instanceof Error ? error.message : String(error);
+}
+
+function auditSqlDigest(sql) {
+  return typeof sql === 'string' ? `sha256:${createHash('sha256').update(sql, 'utf8').digest('hex')}` : null;
 }
 
 export function resolveAuditPath(auditPath) {
@@ -92,6 +96,75 @@ export async function processQuery(
   }
 }
 
+/**
+ * Runs the explicitly enabled raw-query compatibility flow. Unlike the
+ * lexical processQuery helper, this boundary verifies the workload identity
+ * and binds the resulting principal to every database execution and audit.
+ */
+export async function processRawCompatibilityRequest(input, dependencies = {}) {
+  const createCorrelationId = dependencies.createCorrelationId ?? randomUUID;
+  const correlationId = createCorrelationId();
+  const audit = dependencies.audit;
+  const breakGlassReason = typeof dependencies.breakGlassReason === 'string' && dependencies.breakGlassReason.trim()
+    ? dependencies.breakGlassReason.trim()
+    : null;
+  const baseAudit = {
+    correlationId,
+    subject: null,
+    organization: null,
+    capability: 'raw_query_compatibility',
+    purpose: breakGlassReason,
+    resource: null,
+    request: { compatibility: 'raw_query', reason: breakGlassReason },
+    sql: auditSqlDigest(input?.sql),
+    databaseOutcome: null,
+    rowCount: null,
+    sessionId: input?.codexSessionId ?? null,
+  };
+  const record = (entry) => {
+    if (!audit || typeof audit.record !== 'function') throw new Error('Audit unavailable.');
+    audit.record({ ...baseAudit, ...entry, capability: 'raw_query_compatibility', purpose: breakGlassReason });
+  };
+
+  if (!breakGlassReason) {
+    try { record({ decision: 'deny', reason: 'Break-glass reason is required.' }); } catch { /* fail closed */ }
+    return response({ correlationId, decision: 'deny', reason: 'Break-glass reason is required.' }, true);
+  }
+
+  let principal;
+  try {
+    const getToken = dependencies.getToken ?? (() => readWorkloadToken(dependencies.tokenFile ?? process.env.OIDC_TOKEN_FILE));
+    const verifyIdentity = dependencies.verifyIdentity ?? dependencies.identityVerifier;
+    if (typeof verifyIdentity !== 'function') throw new Error('Identity verifier unavailable.');
+    const token = await getToken();
+    principal = await verifyIdentity(token);
+    if (!validPrincipal(principal)) throw new Error('Invalid verified principal.');
+  } catch {
+    try { record({ decision: 'deny', reason: 'Identity verification failed.' }); } catch { /* fail closed */ }
+    return response({ correlationId, decision: 'deny', reason: 'Identity verification failed.' }, true);
+  }
+
+  const rawAudit = {
+    record: (entry) => record({
+      ...entry,
+      sql: auditSqlDigest(entry?.sql),
+      subject: principal.subject,
+      organization: principal.organization,
+    }),
+  };
+  const executeRaw = dependencies.execute
+    ?? dependencies.database?.executeAllowedQueryWithContext;
+  const execute = typeof executeRaw === 'function'
+    ? (sql) => executeRaw(sql, principal)
+    : executeRaw;
+  return processQuery(input, {
+    mode: dependencies.mode ?? 'read-only',
+    audit: rawAudit,
+    execute,
+    logError: dependencies.logError ?? ((message) => console.error(message)),
+  });
+}
+
 const scalarSchema = z.union([z.string(), z.number(), z.boolean(), z.null()]);
 const selectorSchema = z.object({
   field: z.string(),
@@ -134,7 +207,7 @@ function validPrincipal(principal) {
     && Object.hasOwn(principal, 'subject') && typeof principal.subject === 'string' && principal.subject.trim()
     && Object.hasOwn(principal, 'organization') && typeof principal.organization === 'string' && principal.organization.trim()
     && Object.hasOwn(principal, 'tenantId') && typeof principal.tenantId === 'string' && principal.tenantId.trim()
-    && Array.isArray(principal.roles) && principal.roles.length > 0
+    && Object.hasOwn(principal, 'roles') && Array.isArray(principal.roles) && principal.roles.length > 0
     && principal.roles.every((role) => typeof role === 'string' && role.trim())
     && new Set(principal.roles).size === principal.roles.length;
 }
@@ -357,22 +430,17 @@ export async function startServer(overrides = {}) {
     rawDatabase = overrides.rawDatabase ?? (overrides.database
       ? overrides.database
       : createDatabase({ connectionString: process.env.POSTGRES_URL, mode: process.env.POLICY_MODE ?? 'read-only' }));
-    const rawAudit = {
-      record: (entry) => audit.record({
-        ...entry,
-        capability: 'raw_query_compatibility',
-        purpose: breakGlassReason,
-        request: { compatibility: 'raw_query', reason: breakGlassReason },
-      }),
-    };
     server.registerTool('query', {
       title: 'Governed PostgreSQL query (compatibility mode)',
       description: 'Compatibility-only raw SQL access; prefer typed capability tools.',
       inputSchema: { sql: z.string(), codexSessionId: z.string().optional() },
-    }, (input) => processQuery(input, {
+    }, (input) => processRawCompatibilityRequest(input, {
       mode: process.env.POLICY_MODE ?? 'read-only',
-      audit: rawAudit,
-      execute: rawDatabase.executeAllowedQuery,
+      audit,
+      breakGlassReason,
+      getToken,
+      verifyIdentity,
+      execute: rawDatabase.executeAllowedQueryWithContext,
       logError: (message) => console.error(`[sentiql] ${message}`),
     }));
     console.error('[sentiql] WARNING: raw query compatibility mode enabled');

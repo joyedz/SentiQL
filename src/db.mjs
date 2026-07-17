@@ -13,6 +13,18 @@ export function createDatabase({ connectionString, mode = 'read-only', pool } = 
 
   const databasePool = pool ?? new Pool({ connectionString });
 
+  function validateContextPrincipal(principal) {
+    if (!principal || typeof principal !== 'object' || Array.isArray(principal)
+      || !Object.hasOwn(principal, 'subject') || typeof principal.subject !== 'string' || !principal.subject.trim()
+      || !Object.hasOwn(principal, 'organization') || typeof principal.organization !== 'string' || !principal.organization.trim()
+      || !Object.hasOwn(principal, 'tenantId') || typeof principal.tenantId !== 'string' || !principal.tenantId.trim()
+      || !Object.hasOwn(principal, 'roles') || !Array.isArray(principal.roles) || principal.roles.length === 0
+      || !principal.roles.every((role) => typeof role === 'string' && role.trim())
+      || new Set(principal.roles).size !== principal.roles.length) {
+      throw new Error('Invalid database principal.');
+    }
+  }
+
   async function executeAllowedQuery(sql) {
     if (mode === 'read-write') {
       return databasePool.query(sql);
@@ -33,6 +45,36 @@ export function createDatabase({ connectionString, mode = 'read-only', pool } = 
           await client.query('ROLLBACK');
         } catch {
           // Preserve the original execution error; the client is still released below.
+        }
+      }
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async function executeAllowedQueryWithContext(sql, principal) {
+    if (typeof sql !== 'string' || !sql.trim()) throw new Error('Invalid raw query.');
+    validateContextPrincipal(principal);
+    const client = await databasePool.connect();
+    let transactionOpen = false;
+    try {
+      await client.query('BEGIN');
+      transactionOpen = true;
+      if (mode === 'read-only') await client.query('SET TRANSACTION READ ONLY');
+      await client.query("SELECT set_config('app.subject', $1, true)", [principal.subject]);
+      await client.query("SELECT set_config('app.organization', $1, true)", [principal.organization]);
+      await client.query("SELECT set_config('app.tenant_id', $1, true)", [principal.tenantId]);
+      const result = await client.query(sql);
+      await client.query('COMMIT');
+      transactionOpen = false;
+      return result;
+    } catch (error) {
+      if (transactionOpen) {
+        try {
+          await client.query('ROLLBACK');
+        } catch {
+          // Preserve the original execution error; the client is released below.
         }
       }
       throw error;
@@ -97,6 +139,7 @@ export function createDatabase({ connectionString, mode = 'read-only', pool } = 
 
   return {
     executeAllowedQuery,
+    executeAllowedQueryWithContext,
     executeCompiled,
     close: () => databasePool.end(),
   };
