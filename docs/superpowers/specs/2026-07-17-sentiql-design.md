@@ -1,5 +1,7 @@
 # SentiQL Design
 
+> **Historical document:** This design describes the pre-Semantic Firewall governed SQL proxy. It is retained for provenance and is superseded by [Semantic Firewall v1 Design](../specs/2026-07-17-semantic-firewall-design.md).
+
 ## Goal
 
 Provide a governed PostgreSQL MCP server that enforces SQL policy at the server boundary, records every decision, and gives operators a small live audit console.

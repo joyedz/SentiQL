@@ -1,5 +1,7 @@
 # Semantic Firewall v1 Implementation Plan
 
+> **Status:** Implemented and merged into `main`. This document records the original execution plan; its unchecked RED/GREEN task boxes are historical steps, not outstanding work. See the repository README for the current operator workflow.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Turn the existing governed PostgreSQL MCP server into a self-hosted semantic firewall that authorizes verified workloads to perform policy-constrained discovery, reads, aggregates, and approved mutations.
@@ -121,7 +123,7 @@ export function loadPolicyBundle(filePath) {
 
 The Zod contract must require: non-empty bundle `version`; at least one issuer with `issuer`, `audience`, and `jwksUrl` URLs; non-empty identity claim-name mappings; resource `schema`, `table`, `tenantColumn`, unique field arrays, unique selectors, and mutation action definitions; and grants that use only the four supported capabilities. Validate cross-references after parsing: every grant resource exists, every mutation action exists on that resource, and grants with `data.mutate` declare at least one action.
 
-Add `POLICY_BUNDLE_PATH=./config/policy.json` and the OIDC token-file settings from Task 3 to `.env.example`. Add `jose` to `dependencies` in `package.json` without changing unrelated package metadata.
+Add `POLICY_BUNDLE_PATH=./config/policy.example.json` and the OIDC token-file settings from Task 3 to `.env.example`. Add `jose` to `dependencies` in `package.json` without changing unrelated package metadata.
 
 - [ ] **Step 4: Run the focused test to verify GREEN**
 
@@ -565,7 +567,7 @@ data_aggregate(resource, metric, groupBy?, selector?, limit, purpose)
 data_mutate(resource, action, selector, values, purpose)
 ```
 
-Build each tool's normalized input internally with a fixed `capability` value. Never place `subject`, `organization`, `tenantId`, policy version, or workload token in a tool schema. Load the bundle and identity verifier once at startup, use `OIDC_TOKEN_FILE` on each request, and construct `createDatabase()` without `POLICY_MODE` for semantic tools.
+Build each tool's normalized input internally with a fixed `capability` value. Never place `subject`, `organization`, `tenantId`, policy version, or workload token in a tool schema. Load the bundle and identity verifier once at startup, use `OIDC_TOKEN_FILE` on each request, and honor the configured `POLICY_MODE`; semantic reads and aggregates still enforce transaction-level read-only execution.
 
 Retain `query` registration only when `ENABLE_RAW_QUERY_COMPATIBILITY=true`. When enabled, require `RAW_QUERY_BREAK_GLASS_REASON` at startup, preserve `processQuery` behavior, attach the reason and `raw_query_compatibility` capability to its audit records, and log a startup warning. When disabled (the default), do not register the tool.
 

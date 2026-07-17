@@ -1,5 +1,7 @@
 # SentiQL Implementation Plan
 
+> **Historical document:** This plan describes the pre-Semantic Firewall implementation. It is retained for provenance and is superseded by [Semantic Firewall v1 Implementation Plan](../plans/2026-07-17-semantic-firewall-v1.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build a governed PostgreSQL MCP server that refuses unsafe SQL, audits every decision locally, and exposes a live audit dashboard.
