@@ -61,7 +61,7 @@ flowchart LR
 
 The MCP server boundary is the enforcement point: every database request sent through this MCP tool must be evaluated and audited before it can reach PostgreSQL. A Codex `PreToolUse` hook is not a substitute, because hooks do not reliably cover MCP tool calls.
 
-Read-only mode also uses `BEGIN READ ONLY` for every database execution. In production, use a PostgreSQL credential with a read-only database role as well. The database role and transaction are defense in depth if policy parsing is bypassed or a side-effecting `SELECT` function is attempted; policy validation remains the first boundary.
+Typed reads and aggregates start a transaction and issue `SET TRANSACTION READ ONLY` before setting the verified RLS context. Raw compatibility queries (when explicitly enabled) use `BEGIN READ ONLY`. In production, use a PostgreSQL credential with a read-only database role as well. The database role and transaction are defense in depth if policy parsing is bypassed or a side-effecting `SELECT` function is attempted; policy validation remains the first boundary.
 
 ## Register with Codex
 
@@ -123,3 +123,16 @@ docker compose exec -T -e PGPASSWORD=sentiql_app postgres psql -U sentiql_app -d
 - Run migrations/`seed.sql` as the bootstrap owner, verify RLS with tenant-a and tenant-b contexts, then confirm the app role cannot bypass policies.
 - Start the MCP server and dashboard, exercise all four typed tools, and inspect structured audit events (correlation, principal, purpose, policy hash, decision, and database outcome).
 - If raw break-glass is required, document the reason, scope, expiry, and rollback owner; disable it and rotate credentials before production sign-off.
+
+### Release-gate security checklist
+
+Run the same checks used by CI before release:
+
+```sh
+npm ci
+npm test
+npm run policy:simulate -- --bundle ./config/policy.example.json --fixture ./tests/fixtures/allowed-read.json
+docker compose config --quiet
+```
+
+The release-gate tests verify fail-closed behavior for missing or spoofed identity, malformed policy, audit persistence and compilation failures, RLS/database errors, tenant-scope escalation, unauthorized fields, disallowed mutations, and raw SQL bypass attempts. The positive control verifies the allow-audit, RLS context, read-only transaction, and PostgreSQL execution sequence.

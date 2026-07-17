@@ -324,7 +324,13 @@ export async function startServer(overrides = {}) {
   const breakGlassReason = rawEnabled ? process.env.RAW_QUERY_BREAK_GLASS_REASON?.trim() : null;
   if (rawEnabled && !breakGlassReason) throw new Error('RAW_QUERY_BREAK_GLASS_REASON is required when raw query compatibility is enabled.');
   const audit = overrides.audit ?? createAuditLog(resolveAuditPath(process.env.AUDIT_DB_PATH ?? './data/audit.sqlite'));
-  const database = overrides.database ?? createDatabase({ connectionString: process.env.POSTGRES_URL, mode: 'read-write' });
+  // Typed capabilities use the configured policy mode.  Keep read-only as the
+  // safe default; executeCompiled still enforces transaction read-only for
+  // semantic reads/aggregates while allowing mutations only in read-write mode.
+  const database = overrides.database ?? createDatabase({
+    connectionString: process.env.POSTGRES_URL,
+    mode: process.env.POLICY_MODE ?? 'read-only',
+  });
   const getToken = overrides.getToken ?? (() => readWorkloadToken(process.env.OIDC_TOKEN_FILE));
   const server = new McpServer({ name: 'sentiql', version: '1.0.0' });
   const capabilityDeps = { policy, audit, database, verifyIdentity, getToken };
