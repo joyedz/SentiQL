@@ -1,0 +1,15 @@
+{
+  "principal": {
+    "subject": "workload-support",
+    "organization": "acme",
+    "tenantId": "tenant-a",
+    "roles": ["support-agent"]
+  },
+  "request": {
+    "capability": "data.read",
+    "resource": "crm.support_cases",
+    "purpose": "customer_support",
+    "fields": ["id", "status", "priority", "assignee_id", "created_at"],
+    "limit": 20
+  }
+}

@@ -5,8 +5,10 @@ services:
     image: postgres:16
     environment:
       POSTGRES_DB: sentiql
-      POSTGRES_USER: sentiql
-      POSTGRES_PASSWORD: sentiql
+      POSTGRES_USER: sentiql_bootstrap
+      POSTGRES_PASSWORD: sentiql_bootstrap
+      # SentiQL connects with the non-owner, RLS-enforced application role.
+      POSTGRES_URL: postgresql://sentiql_app:sentiql_app@postgres:5432/sentiql
     ports:
       - "5432:5432"
     volumes:

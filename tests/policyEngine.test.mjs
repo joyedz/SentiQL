@@ -168,6 +168,14 @@ test('denies COPY FROM PROGRAM in read-only mode', () => {
   assert.match(result.reason, /COPY.*not permitted|unrecognized/i);
 });
 
+test('denies context-mutating set_config calls', () => {
+  const result = evaluatePolicy("SELECT set_config('app.tenant_id', 'tenant-b', true)", { mode: 'read-only' });
+  assert.equal(result.decision, 'deny');
+  assert.match(result.reason, /context-mutating|set_config/i);
+  const quoted = evaluatePolicy("SELECT \"set_config\"('app.tenant_id', 'tenant-b', true)", { mode: 'read-only' });
+  assert.equal(quoted.decision, 'deny');
+});
+
 test('denies CREATE TABLE in read-only mode', () => {
   const result = evaluatePolicy('CREATE TABLE copied_users (id integer)', {
     mode: 'read-only',

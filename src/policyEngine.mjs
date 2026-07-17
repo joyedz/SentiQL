@@ -9,6 +9,7 @@ const READ_WRITE_ALLOW = {
 };
 
 const WRITE_KEYWORDS = new Set(['INSERT', 'UPDATE', 'DELETE']);
+const CONTEXT_MUTATION_FUNCTIONS = new Set(['SET_CONFIG']);
 const READ_QUERY_KEYWORDS = new Set(['SELECT', 'VALUES', 'EXPLAIN', 'SHOW', 'WITH']);
 const DESTRUCTIVE_DROP_TARGETS = new Set([
   'TABLE',
@@ -47,6 +48,7 @@ function maskSql(sql) {
   // String indexes are UTF-16 code-unit offsets. Keep the masks in that same
   // coordinate system so ranges remain correct before astral Unicode literals.
   const masked = sql.split('');
+  const functionMasked = sql.split('');
   const stripped = sql.split('');
 
   for (let index = 0; index < sql.length;) {
@@ -54,6 +56,7 @@ function maskSql(sql) {
       const lineEnd = sql.indexOf('\n', index + 2);
       const end = lineEnd === -1 ? sql.length : lineEnd;
       maskRange(masked, index, end);
+      maskRange(functionMasked, index, end);
       maskRange(stripped, index, end);
       index = end;
       continue;
@@ -66,6 +69,7 @@ function maskSql(sql) {
       }
       const end = close + 2;
       maskRange(masked, index, end);
+      maskRange(functionMasked, index, end);
       maskRange(stripped, index, end);
       index = end;
       continue;
@@ -103,6 +107,7 @@ function maskSql(sql) {
       }
 
       maskRange(masked, index, cursor);
+      if (quote === "'") maskRange(functionMasked, index, cursor);
       index = cursor;
       continue;
     }
@@ -116,6 +121,7 @@ function maskSql(sql) {
         }
         const end = close + delimiter.length;
         maskRange(masked, index, end);
+        maskRange(functionMasked, index, end);
         index = end;
         continue;
       }
@@ -124,7 +130,7 @@ function maskSql(sql) {
     index += 1;
   }
 
-  return { masked: masked.join(''), stripped: stripped.join('') };
+  return { masked: masked.join(''), functionMasked: functionMasked.join(''), stripped: stripped.join('') };
 }
 
 function tokenize(masked) {
@@ -338,7 +344,7 @@ export function evaluatePolicy(sql, { mode = 'read-only' } = {}) {
     return deny(lexical.error);
   }
 
-  const { masked, stripped } = lexical;
+  const { masked, functionMasked, stripped } = lexical;
   if (!/\S/.test(stripped)) {
     return deny('SQL must contain executable SQL; empty or comment-only input is not permitted.');
   }
@@ -359,6 +365,11 @@ export function evaluatePolicy(sql, { mode = 'read-only' } = {}) {
   const destructive = destructiveStatement(tokens);
   if (destructive) {
     return deny(`Destructive statement "${destructive}" is not permitted.`);
+  }
+
+  const contextMutation = tokenize(functionMasked).find((token) => CONTEXT_MUTATION_FUNCTIONS.has(token.value));
+  if (contextMutation) {
+    return deny(`Context-mutating function "${contextMutation.value}" is not permitted.`);
   }
 
   if (hasSelectInto(tokens, masked)) {

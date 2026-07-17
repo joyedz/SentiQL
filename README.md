@@ -22,7 +22,28 @@ npm run dashboard
 
 The dashboard is available at [http://127.0.0.1:3030](http://127.0.0.1:3030). It polls its audit feed every two seconds. On PowerShell, replace `cp` with `Copy-Item`.
 
-`npm start` and `npm run dashboard` load `.env` when present. The supplied Compose service exposes PostgreSQL 16 at `127.0.0.1:5432` with the demonstration `sentiql` database, user, and password.
+`npm start` and `npm run dashboard` load `.env` when present. The supplied Compose service exposes PostgreSQL 16 at `127.0.0.1:5432`. Compose bootstraps with the distinct `sentiql_bootstrap` owner, while SentiQL connects as the non-owner `sentiql_app` role.
+
+## Policy bundle and simulation
+
+`POLICY_BUNDLE_PATH` points to a versioned JSON policy bundle (the example is `config/policy.example.json`). It defines OIDC issuer/claim mappings, typed resources, tenant row scope, purposes, field permissions, and mutation limits. Bundles are validated and hashed at load time; the hash is included in every semantic audit event.
+
+Use the offline simulator to review a fixture without opening a database, reading a token, or making a network call:
+
+```sh
+npm run policy:simulate -- --bundle ./config/policy.example.json --fixture ./fixtures/support-read.json
+```
+
+The fixture is JSON with `principal` (`subject`, `organization`, `tenantId`, `roles`) and a typed `request`. Allowed decisions print JSON to stdout. Invalid bundles/fixtures and denied decisions print a controlled message to stderr and exit 1.
+
+The four MCP tools accept these exact argument shapes (all include a non-empty `purpose`):
+
+```text
+schema_discover({ resource, purpose })
+data_read({ resource, fields: string[], selector?: { field, op: "eq", value }, limit?: positiveInteger, purpose })
+data_aggregate({ resource, metric: { op: "count" } | { op: "sum", field }, groupBy?: string[], selector?, limit?: positiveInteger, purpose })
+data_mutate({ resource, action, selector: { field, op: "eq", value }, values: { writableField: scalar }, purpose })
+```
 
 ## Policy mode
 
@@ -40,7 +61,7 @@ flowchart LR
 
 The MCP server boundary is the enforcement point: every database request sent through this MCP tool must be evaluated and audited before it can reach PostgreSQL. A Codex `PreToolUse` hook is not a substitute, because hooks do not reliably cover MCP tool calls.
 
-Read-only mode also uses `BEGIN READ ONLY` for every database execution. In production, use a PostgreSQL credential with a read-only database role as well. The database role and transaction are defense in depth if policy parsing is bypassed or a side-effecting `SELECT` function is attempted; policy validation remains the first boundary.
+Typed reads and aggregates start a transaction and issue `SET TRANSACTION READ ONLY` before setting the verified RLS context. Raw compatibility queries (when explicitly enabled) also require a verified OIDC principal, start `BEGIN`, set the transaction read-only mode when configured, and establish the transaction-local RLS context before executing SQL. The lexical policy rejects context-mutating `set_config` calls so raw SQL cannot replace the verified tenant GUC. In production, use a PostgreSQL credential with a read-only database role as well. The database role and transaction are defense in depth if policy parsing is bypassed or a side-effecting `SELECT` function is attempted; policy validation remains the first boundary.
 
 ## Register with Codex
 
@@ -64,8 +85,54 @@ Replace both placeholder paths with your own absolute paths. `POSTGRES_URL` is r
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `POSTGRES_URL` | local Compose URL | PostgreSQL connection string |
+| `POSTGRES_URL` | `postgresql://sentiql_app:sentiql_app@127.0.0.1:5432/sentiql` | PostgreSQL connection string for the non-owner RLS role |
 | `POLICY_MODE` | `read-only` | `read-only` or explicit `read-write` policy |
+| `POLICY_BUNDLE_PATH` | `./config/policy.example.json` | Versioned policy bundle, including the OIDC issuer and claim mappings |
+| `OIDC_TOKEN_FILE` | `/run/secrets/agentconnect-oidc-token` | Host/workload-managed file containing the short-lived OIDC access token |
 | `AUDIT_DB_PATH` | `./data/audit.sqlite` | Shared SQLite path; relative values resolve from the project root, not the MCP process working directory |
 | `DASHBOARD_HOST` | `127.0.0.1` | Dashboard bind host |
 | `DASHBOARD_PORT` | `3030` | Dashboard port |
+
+## Workload identity
+
+Production requests are authenticated with an OIDC workload token supplied by the MCP host or workload platform through `OIDC_TOKEN_FILE`. SentiQL reads and trims the file for each request, verifies its signature against the HTTPS issuer/JWKS configuration in the policy bundle, and checks issuer, audience, expiry, issued-at, subject, organization, tenant, and roles claims. The resulting principal is immutable and is never accepted from tool arguments.
+
+The token file is host-managed and must be readable by the SentiQL process, contain one current token, and be rotated before its short lifetime expires. Missing, empty, malformed, expired, or unverifiable tokens fail closed. Configure HTTPS issuer and JWKS endpoints in production and rotate signing keys through the issuer's normal JWKS mechanism.
+
+Agents must not supply or override a subject, organization, tenant, role, or purpose in a request. Those values come from the verified token and policy bundle; request inputs are authorization data only, never caller-supplied identity.
+
+## Database RLS and MCP surface
+
+`seed.sql` creates `crm.support_cases`, enables and forces row-level security, and grants only schema usage plus `SELECT`/`UPDATE` to `sentiql_app` (`NOBYPASSRLS`). Before each compiled query the server sets transaction-local `app.subject`, `app.organization`, and `app.tenant_id`; tenant policies compare `tenant_id` with `current_setting('app.tenant_id', true)`. Keep the bootstrap owner separate from application credentials in deployments.
+
+The normal MCP surface is four typed tools: `schema_discover`, `data_read`, `data_aggregate`, and `data_mutate`. Raw `query` compatibility is disabled by default. A deliberate break-glass pilot may set `ENABLE_RAW_QUERY_COMPATIBILITY=true` and must provide a non-empty `RAW_QUERY_BREAK_GLASS_REASON`; every raw call still requires OIDC verification, is scoped to the verified principal through PostgreSQL RLS context, and is separately audited with correlation and identity fields. Raw SQL is represented by a SHA-256 digest in the audit trail so sensitive literals are not persisted. Prefer typed tools and remove the compatibility flag after the pilot.
+
+To verify the demo RLS boundary after a fresh bootstrap, inspect the role as the owner and query each tenant through the app role (each command should return only its tenant's two rows):
+
+```sh
+docker compose up -d
+docker compose exec -T postgres psql -U sentiql_bootstrap -d sentiql -c "\du sentiql_app"
+docker compose exec -T -e PGPASSWORD=sentiql_app postgres psql -U sentiql_app -d sentiql -c "BEGIN; SELECT set_config('app.tenant_id', 'tenant-a', true); SELECT id, tenant_id, status FROM crm.support_cases ORDER BY id; COMMIT;"
+docker compose exec -T -e PGPASSWORD=sentiql_app postgres psql -U sentiql_app -d sentiql -c "BEGIN; SELECT set_config('app.tenant_id', 'tenant-b', true); SELECT id, tenant_id, status FROM crm.support_cases ORDER BY id; COMMIT;"
+```
+
+### Deployment and pilot checklist
+
+- Pin and review the policy bundle; record its version/hash and test representative allow/deny fixtures with `npm run policy:simulate`.
+- Configure an HTTPS OIDC issuer/JWKS, a short-lived rotated token file, and least-privilege `sentiql_app` credentials in the workload secret store.
+- Run migrations/`seed.sql` as the bootstrap owner, verify RLS with tenant-a and tenant-b contexts, then confirm the app role cannot bypass policies.
+- Start the MCP server and dashboard, exercise all four typed tools, and inspect structured audit events (correlation, principal, purpose, policy hash, decision, and database outcome).
+- If raw break-glass is required, document the reason, scope, expiry, and rollback owner; disable it and rotate credentials before production sign-off.
+
+### Release-gate security checklist
+
+Run the same checks used by CI before release:
+
+```sh
+npm ci
+npm test
+npm run policy:simulate -- --bundle ./config/policy.example.json --fixture ./tests/fixtures/allowed-read.json
+docker compose config --quiet
+```
+
+The release-gate tests verify fail-closed behavior for missing or spoofed identity, malformed policy, audit persistence and compilation failures, RLS/database errors, tenant-scope escalation, unauthorized fields, disallowed mutations, and raw SQL bypass attempts. The positive control verifies the allow-audit, RLS context, read-only transaction, and PostgreSQL execution sequence.
