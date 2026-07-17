@@ -3,8 +3,14 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod';
 
 const nonEmptyString = z.string().trim().min(1);
+const identifier = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/);
 const uniqueStrings = z
   .array(nonEmptyString)
+  .refine((values) => new Set(values).size === values.length, {
+    message: 'values must be unique',
+  });
+const uniqueIdentifiers = z
+  .array(identifier)
   .refine((values) => new Set(values).size === values.length, {
     message: 'values must be unique',
   });
@@ -36,24 +42,32 @@ const claimsSchema = z
 
 const mutationSchema = z
   .object({
-    fields: uniqueStrings,
+    fields: uniqueIdentifiers,
     maxRows: z.number().int().positive(),
+  })
+  .strict();
+
+const grantFieldsSchema = z
+  .object({
+    readable: uniqueIdentifiers.optional(),
+    aggregatable: uniqueIdentifiers.optional(),
+    writable: uniqueIdentifiers.optional(),
   })
   .strict();
 
 const resourceSchema = z
   .object({
-    schema: nonEmptyString,
-    table: nonEmptyString,
-    tenantColumn: nonEmptyString,
+    schema: identifier,
+    table: identifier,
+    tenantColumn: identifier,
     fields: z
       .object({
-        readable: uniqueStrings,
-        aggregatable: uniqueStrings,
-        writable: uniqueStrings,
+        readable: uniqueIdentifiers,
+        aggregatable: uniqueIdentifiers,
+        writable: uniqueIdentifiers,
       })
       .strict(),
-    selectors: uniqueStrings,
+    selectors: uniqueIdentifiers,
     mutations: z.record(z.string(), mutationSchema),
   })
   .strict();
@@ -66,7 +80,8 @@ const grantSchema = z
     purposes: uniqueStrings,
     rowScope: nonEmptyString,
     maxRows: z.number().int().positive().optional(),
-    mutationActions: uniqueStrings.optional(),
+    mutationActions: uniqueIdentifiers.optional(),
+    fields: grantFieldsSchema.optional(),
     approval: z
       .object({
         requiredWhen: z
@@ -101,7 +116,31 @@ const policyBundleSchema = z
         });
       }
 
+      for (const fieldType of ['readable', 'aggregatable', 'writable']) {
+        if (resource.fields[fieldType].includes(resource.tenantColumn)) {
+          context.addIssue({
+            code: 'custom',
+            path: ['resources', resourceName, 'fields', fieldType],
+            message: 'tenantColumn cannot be exposed as a capability field',
+          });
+        }
+      }
+      if (resource.selectors.includes(resource.tenantColumn)) {
+        context.addIssue({
+          code: 'custom',
+          path: ['resources', resourceName, 'selectors'],
+          message: 'tenantColumn cannot be a selector',
+        });
+      }
+
       for (const [actionName, action] of Object.entries(resource.mutations)) {
+        if (!identifier.safeParse(actionName).success) {
+          context.addIssue({
+            code: 'custom',
+            path: ['resources', resourceName, 'mutations', actionName],
+            message: 'mutation action names must be SQL identifiers',
+          });
+        }
         for (const field of action.fields) {
           if (!resource.fields.writable.includes(field)) {
             context.addIssue({
@@ -150,6 +189,22 @@ const policyBundleSchema = z
           path: ['grants', index, 'mutationActions'],
           message: 'mutationActions are only valid for data.mutate grants',
         });
+      }
+
+      if (grant.fields) {
+        for (const fieldType of ['readable', 'aggregatable', 'writable']) {
+          const restricted = grant.fields[fieldType];
+          if (!restricted) continue;
+          for (const field of restricted) {
+            if (field === resource.tenantColumn || !resource.fields[fieldType].includes(field)) {
+              context.addIssue({
+                code: 'custom',
+                path: ['grants', index, 'fields', fieldType],
+                message: `grant field ${field} is not permitted for resource ${grant.resource}`,
+              });
+            }
+          }
+        }
       }
     });
   });

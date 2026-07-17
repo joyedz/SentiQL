@@ -124,6 +124,22 @@ test('rejects unknown fields and duplicate entries in strict arrays', () => {
   assert.throws(() => validatePolicyBundle(duplicateField), /duplicate|unique/i);
 });
 
+test('rejects SQL-like resource identifiers in policy metadata', () => {
+  const invalid = structuredClone(validBundle);
+  invalid.resources['crm.support_cases'].table = 'support_cases;DROP';
+  assert.throws(() => validatePolicyBundle(invalid), /Invalid policy bundle/i);
+});
+
+test('validates optional grant field restrictions against resource metadata', () => {
+  const valid = structuredClone(validBundle);
+  valid.grants[1].fields = { readable: ['id', 'status'] };
+  assert.equal(validatePolicyBundle(valid).grants[1].fields.readable[0], 'id');
+
+  const invalid = structuredClone(validBundle);
+  invalid.grants[1].fields = { readable: ['tenant_id'] };
+  assert.throws(() => validatePolicyBundle(invalid), /grant field|tenantColumn/i);
+});
+
 test('rejects mutation grants that reference an unknown action', () => {
   const invalid = structuredClone(validBundle);
   invalid.grants[2].mutationActions = ['delete_case'];
