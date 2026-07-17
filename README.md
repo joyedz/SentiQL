@@ -66,6 +66,16 @@ Replace both placeholder paths with your own absolute paths. `POSTGRES_URL` is r
 | --- | --- | --- |
 | `POSTGRES_URL` | local Compose URL | PostgreSQL connection string |
 | `POLICY_MODE` | `read-only` | `read-only` or explicit `read-write` policy |
+| `POLICY_BUNDLE_PATH` | `./config/policy.json` | Versioned policy bundle, including the OIDC issuer and claim mappings |
+| `OIDC_TOKEN_FILE` | `/run/secrets/agentconnect-oidc-token` | Host/workload-managed file containing the short-lived OIDC access token |
 | `AUDIT_DB_PATH` | `./data/audit.sqlite` | Shared SQLite path; relative values resolve from the project root, not the MCP process working directory |
 | `DASHBOARD_HOST` | `127.0.0.1` | Dashboard bind host |
 | `DASHBOARD_PORT` | `3030` | Dashboard port |
+
+## Workload identity
+
+Production requests are authenticated with an OIDC workload token supplied by the MCP host or workload platform through `OIDC_TOKEN_FILE`. SentiQL reads and trims the file for each request, verifies its signature against the HTTPS issuer/JWKS configuration in the policy bundle, and checks issuer, audience, expiry, issued-at, subject, organization, tenant, and roles claims. The resulting principal is immutable.
+
+The token file is host-managed and must be readable by the SentiQL process, contain one current token, and be rotated before its short lifetime expires. Missing, empty, malformed, expired, or unverifiable tokens fail closed. Configure HTTPS issuer and JWKS endpoints in production and rotate signing keys through the issuer's normal JWKS mechanism.
+
+Agents must not supply or override a subject, organization, tenant, role, or purpose in a request. Those values come from the verified token and policy bundle; request inputs are authorization data only, never caller-supplied identity.
