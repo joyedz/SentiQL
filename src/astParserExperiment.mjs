@@ -45,8 +45,9 @@ function walk(value, visit) {
 }
 
 export function summarizeAst(result) {
+  const statements = Array.isArray(result?.statements) ? result.statements : [];
   const summary = {
-    statementKinds: result.statements.map(({ kind }) => kind),
+    statementKinds: statements.map((statement) => statement?.kind ?? null),
     nestedStatementKinds: [],
     writeNodeCount: 0,
     functionCallCount: 0,
@@ -62,14 +63,25 @@ export function summarizeAst(result) {
     'DoStmt',
     'TransactionStmt',
   ]);
-  const topLevelKinds = new Set(summary.statementKinds);
+  const statementNodeKinds = new Set([
+    'SelectStmt',
+    ...writeKinds,
+    ...utilityKinds,
+  ]);
+  const topLevelNodes = new Set(
+    statements
+      .map((statement) => statement?.raw)
+      .filter((raw) => raw && typeof raw === 'object'),
+  );
 
-  walk(result.raw, node => {
+  walk(result?.raw, node => {
     for (const key of Object.keys(node)) {
       if (writeKinds.has(key)) summary.writeNodeCount += 1;
       if (utilityKinds.has(key)) summary.utilityNodeCount += 1;
       if (key === 'FuncCall') summary.functionCallCount += 1;
-      if (key.endsWith('Stmt') && !topLevelKinds.has(key)) summary.nestedStatementKinds.push(key);
+      if (statementNodeKinds.has(key) && !topLevelNodes.has(node)) {
+        summary.nestedStatementKinds.push(key);
+      }
     }
   });
 

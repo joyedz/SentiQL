@@ -105,6 +105,34 @@ test('summarizes a writable CTE nested delete', async () => {
   assert.deepEqual(summary.nestedStatementKinds, ['DeleteStmt']);
 });
 
+test('summarizes a nested select statement without wrapper keys', async () => {
+  const parser = createAstParser(16);
+  const result = await parser.parse('SELECT * FROM (SELECT 1) AS nested');
+
+  assert.deepEqual(summarizeAst(result).nestedStatementKinds, ['SelectStmt']);
+});
+
+test('summarizes the select inside INSERT ... SELECT without wrapper keys', async () => {
+  const parser = createAstParser(16);
+  const result = await parser.parse('INSERT INTO users(id) SELECT id FROM users');
+
+  const summary = summarizeAst(result);
+
+  assert.deepEqual(summary.statementKinds, ['InsertStmt']);
+  assert.deepEqual(summary.nestedStatementKinds, ['SelectStmt']);
+  assert.ok(summary.nestedStatementKinds.every((kind) => /^[A-Z][A-Za-z0-9]*Stmt$/.test(kind)));
+});
+
+test('summarizes normalized malformed input with safe defaults', () => {
+  assert.deepEqual(summarizeAst({ statements: [null], raw: null }), {
+    statementKinds: [null],
+    nestedStatementKinds: [],
+    writeNodeCount: 0,
+    functionCallCount: 0,
+    utilityNodeCount: 0,
+  });
+});
+
 test('summarizes set_config as a function call', async () => {
   const parser = createAstParser(16);
   const result = await parser.parse("SELECT set_config('app.tenant_id', $1, true)");
