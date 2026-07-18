@@ -53,9 +53,9 @@ The normalized layer will keep parser-specific node names out of benchmark and p
 
 ## Dependency decision to evaluate
 
-`@pgsql/parser` is the leading candidate because it exposes version selection through one interface and uses PostgreSQL-derived parser builds. The experiment pins `@pgsql/parser` at version 1.5.0. That package exposes PostgreSQL parser versions 13–18; the original experiment target was 13–17, with PG18 available for compatibility evaluation. The experiment will record its package size and transitive dependency count.
+`@pgsql/parser` is the leading candidate because it exposes version selection through one interface and uses PostgreSQL-derived parser builds. The experiment pins `@pgsql/parser` at version 1.5.0 as a dev dependency. That package exposes PostgreSQL parser versions 13–18; the original experiment target was 13–17, with PG18 available for compatibility evaluation. The experiment will record its package size and transitive dependency count.
 
-The experiment adapter is an ESM module, but the package's ESM entry currently fails under Node.js 24 because of an extensionless internal import. The adapter must therefore use `createRequire()` from `node:module` to access the package's working CommonJS entry. This workaround is experiment-only and must not change production code.
+The experiment adapter is an ESM module, but the observed package ESM failure under Node.js 24 is `ERR_UNSUPPORTED_DIR_IMPORT` from `wasm/v13/index.js` importing `./types`. The adapter must therefore use `createRequire()` from `node:module` to access the package's working CommonJS entry. This workaround is experiment-only and must not change production code. Node.js 22 compatibility is not yet verified; before accepting the adapter, run `node --version` and `node -e "const { getSupportedVersions } = require('@pgsql/parser'); console.log(getSupportedVersions())"` under Node.js 22.x and confirm the output includes `[13, 14, 15, 16, 17, 18]`.
 
 The experiment will treat the following as decision inputs:
 

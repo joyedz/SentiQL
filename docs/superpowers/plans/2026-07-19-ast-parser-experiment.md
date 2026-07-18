@@ -6,7 +6,7 @@
 
 **Architecture:** Add a small adapter around `@pgsql/parser` that selects the pinned package's PostgreSQL 13–18 parser versions and returns normalized metadata without exposing parser-specific ASTs to production code. The original experiment target was PostgreSQL 13–17; PG18 is available in `@pgsql/parser` 1.5.0 and should be included in compatibility evaluation. Add tests for parser behavior and a standalone benchmark runner comparing cold initialization, warm parsing, AST traversal, and current heuristic evaluation; do not modify production request routing or policy decisions.
 
-**Tech Stack:** Node.js 22 ESM, `@pgsql/parser`, `node:test`, `node:perf_hooks`, existing `evaluatePolicy`, npm lockfile.
+**Tech Stack:** Node.js 22 ESM, `@pgsql/parser` as an experiment-only dev dependency, `node:test`, `node:perf_hooks`, existing `evaluatePolicy`, npm lockfile.
 
 ---
 
@@ -21,7 +21,9 @@
 Add the exact experiment dependency entry to `package.json`:
 
 ```json
-"@pgsql/parser": "1.5.0"
+"devDependencies": {
+  "@pgsql/parser": "1.5.0"
+}
 ```
 
 Keep the existing production dependencies unchanged.
@@ -44,7 +46,7 @@ Run:
 node -e "const { getSupportedVersions } = require('@pgsql/parser'); console.log(getSupportedVersions())"
 ```
 
-Expected: output includes `[13, 14, 15, 16, 17, 18]`; the original experiment target remains 13–17, with PG18 available for additional compatibility coverage.
+Expected: output includes `[13, 14, 15, 16, 17, 18]`; the original experiment target remains 13–17, with PG18 available for additional compatibility coverage. Because the package is experiment-only, it must remain in `devDependencies` and must not affect production installs.
 
 - [ ] **Step 4: Run the existing suite**
 
@@ -82,7 +84,7 @@ import {
 } from '../src/astParserExperiment.mjs';
 
 test('exposes the parser versions supported by the dependency', () => {
-  assert.deepEqual(getSupportedAstParserVersions(), [13, 14, 15, 16, 17]);
+  assert.deepEqual(getSupportedAstParserVersions(), [13, 14, 15, 16, 17, 18]);
 });
 
 test('creates a parser for an explicitly selected PostgreSQL version', async () => {
@@ -107,7 +109,14 @@ Expected: fail because `src/astParserExperiment.mjs` does not yet export the ada
 
 - [ ] **Step 3: Implement the minimal parser adapter**
 
-Implement `src/astParserExperiment.mjs` with this contract. Because this adapter is ESM and the package's ESM entry currently fails under Node.js 24 due to an extensionless internal import, use `createRequire()` to access the package's working CommonJS entry. Do not change production code to accommodate this experiment-only package compatibility constraint.
+Implement `src/astParserExperiment.mjs` with this contract. The observed package ESM failure is `ERR_UNSUPPORTED_DIR_IMPORT`: `wasm/v13/index.js` imports `./types`, which Node.js 24 does not resolve as an extensionless directory import. Because this adapter is ESM, use `createRequire()` to access the package's working CommonJS entry. This compatibility workaround is experiment-only and must not change production code. Before implementation is accepted, verify the package under Node.js 22 with:
+
+```powershell
+node --version
+node -e "const { getSupportedVersions } = require('@pgsql/parser'); console.log(getSupportedVersions())"
+```
+
+The first command must report Node.js 22.x, and the second must include `[13, 14, 15, 16, 17, 18]`. Do not claim Node.js 22 compatibility until this check has been run.
 
 ```js
 import { createRequire } from 'node:module';
@@ -176,7 +185,7 @@ Append tests covering malformed input, multiple statements, PostgreSQL literals,
 
 ```js
 test('rejects an unsupported parser version before parsing', () => {
-  assert.throws(() => createAstParser(18), /Unsupported PostgreSQL parser version/);
+  assert.throws(() => createAstParser(19), /Unsupported PostgreSQL parser version/);
 });
 
 test('rejects malformed SQL with a controlled parser error', async () => {
@@ -309,7 +318,7 @@ export const fixtures = [
 
 The runner must:
 
-- accept `--version 13|14|15|16|17`, `--iterations N`, and `--warmup N`;
+- accept `--version 13|14|15|16|17|18`, `--iterations N`, and `--warmup N`;
 - construct one parser per selected version;
 - measure first parse separately from warm parses;
 - measure `summarizeAst` separately from parsing;
@@ -366,10 +375,10 @@ Run each supported parser version with the same workload:
 
 ```powershell
 New-Item -ItemType Directory -Force benchmark-results | Out-Null
-13,14,15,16,17 | ForEach-Object { npm run benchmark:ast -- --version $_ --iterations 5000 --warmup 500 | Set-Content "benchmark-results/pg$_.json" }
+13,14,15,16,17,18 | ForEach-Object { npm run benchmark:ast -- --version $_ --iterations 5000 --warmup 500 | Set-Content "benchmark-results/pg$_.json" }
 ```
 
-Expected: five JSON result files with identical fixture names and metric fields.
+Expected: six JSON result files with identical fixture names and metric fields.
 
 - [ ] **Step 2: Measure package and memory impact**
 
