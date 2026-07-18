@@ -1,16 +1,20 @@
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { Parser } = require('@pgsql/parser');
-const SUPPORTED_VERSIONS = [13, 14, 15, 16, 17, 18];
+const {
+  Parser,
+  getSupportedVersions,
+  isSupportedVersion,
+} = require('@pgsql/parser');
+const SUPPORTED_VERSIONS = getSupportedVersions();
 
 export function getSupportedAstParserVersions() {
   return [...SUPPORTED_VERSIONS];
 }
 
 export function createAstParser(version) {
-  if (!SUPPORTED_VERSIONS.includes(version)) {
-    throw new Error(`Unsupported PostgreSQL version: ${version}`);
+  if (!isSupportedVersion(version)) {
+    throw new Error(`Unsupported PostgreSQL parser version: ${version}`);
   }
 
   const parser = new Parser({ version });
@@ -19,10 +23,10 @@ export function createAstParser(version) {
     version: parser.version,
     ready: parser.ready,
     async parse(sql) {
-      const raw = sql?.trim();
-      if (!raw) {
-        throw new Error('SQL must be non-empty');
+      if (typeof sql !== 'string' || !sql.trim()) {
+        throw new Error('SQL must be a non-empty string.');
       }
+      const raw = sql.trim();
 
       const parsed = await parser.parse(raw);
 
