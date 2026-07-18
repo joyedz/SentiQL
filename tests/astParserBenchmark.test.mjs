@@ -16,6 +16,8 @@ test('malformed fixture separates parser errors from heuristic policy rejections
   assert.equal(result.metrics.astSummary.malformed.samples, 0);
   assert.equal(result.metrics.astSummary.malformed.errors, 2);
   assert.equal(result.metrics.astSummary.malformed.rejections, 0);
+  assert.match(result.metrics.astSummary.malformed.error, /syntax error/i);
+  assert.equal(result.metrics.astSummary.malformed.error, result.metrics.warmParse.malformed.error);
   assert.equal(result.metrics.combinedParseAstSummary.malformed.samples, 0);
   assert.equal(result.metrics.combinedParseAstSummary.malformed.errors, 2);
   assert.equal(result.metrics.combinedParseAstSummary.malformed.rejections, 0);

@@ -358,7 +358,7 @@ Run:
 npm run --silent benchmark:ast -- --version 16 --iterations 100 --warmup 20
 ```
 
-Expected: valid JSON containing all fixtures and separate `initialization`, `coldParse`, `warmParse`, `astSummary`, `combinedParseAstSummary`, and `heuristicPolicy` metrics, plus package and optional heap measurements. Every metric includes `errors` and `rejections`; policy denial reasons are counted separately from thrown exceptions.
+Expected: valid JSON containing all fixtures and separate `initialization`, `coldParse`, `warmParse`, `astSummary`, `combinedParseAstSummary`, and `heuristicPolicy` metrics, plus package and optional heap measurements. Every metric includes `errors` and `rejections`; policy denial reasons are counted separately from thrown exceptions, and parser error messages are preserved across parse-dependent phases.
 
 - [ ] **Step 5: Commit the benchmark harness**
 

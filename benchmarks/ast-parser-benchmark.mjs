@@ -83,13 +83,16 @@ async function timed(operation) {
   }
 }
 
-async function measure(iterations, operation, classifyResult = () => null) {
+async function measure(iterations, operation, classifyResult = () => null, onError = () => {}) {
   const durations = [];
   const errors = [];
   const rejections = [];
   for (let iteration = 0; iteration < iterations; iteration += 1) {
     const result = await timed(operation);
-    if (result.error) errors.push(result.error);
+    if (result.error) {
+      errors.push(result.error);
+      onError(result.error);
+    }
     else {
       durations.push(result.duration);
       const rejection = classifyResult(result.value);
@@ -189,6 +192,7 @@ async function runBenchmark({ version, iterations, warmup: warmupCount }) {
 
   const parser = initialization.value;
   const initialized = new Map();
+  const parserErrors = new Map();
   const coldParse = {};
   const warmParse = {};
   const astSummary = {};
@@ -198,6 +202,7 @@ async function runBenchmark({ version, iterations, warmup: warmupCount }) {
   for (const fixture of fixtures) {
     const result = await timed(() => parser.parse(fixture.sql));
     if (result.error) {
+      parserErrors.set(fixture.name, result.error);
       coldParse[fixture.name] = metric([], [result.error]);
     } else {
       initialized.set(fixture.name, result.value);
@@ -207,17 +212,24 @@ async function runBenchmark({ version, iterations, warmup: warmupCount }) {
 
   for (const fixture of fixtures) {
     await warmup(warmupCount, () => parser.parse(fixture.sql));
-    warmParse[fixture.name] = await measure(iterations, () => parser.parse(fixture.sql));
+    warmParse[fixture.name] = await measure(
+      iterations,
+      () => parser.parse(fixture.sql),
+      undefined,
+      error => {
+        if (!parserErrors.has(fixture.name)) parserErrors.set(fixture.name, error);
+      },
+    );
   }
 
   for (const fixture of fixtures) {
     const parsed = initialized.get(fixture.name);
     await warmup(warmupCount, () => {
-      if (!parsed) throw new Error('No AST available because parsing failed.');
+      if (!parsed) throw parserErrors.get(fixture.name) ?? new Error('No AST available because parsing failed.');
       return summarizeAst(parsed);
     });
     astSummary[fixture.name] = await measure(iterations, () => {
-      if (!parsed) throw new Error('No AST available because parsing failed.');
+      if (!parsed) throw parserErrors.get(fixture.name) ?? new Error('No AST available because parsing failed.');
       return summarizeAst(parsed);
     });
   }
