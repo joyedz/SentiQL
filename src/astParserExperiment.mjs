@@ -12,6 +12,26 @@ export function getSupportedAstParserVersions() {
   return [...SUPPORTED_VERSIONS];
 }
 
+// Normalize optional parser AST fields so unexpected shapes remain inspectable.
+export function normalizeAstParserResult(parsed, parserVersion) {
+  const statements = parsed.stmts ?? [];
+
+  return {
+    parserVersion,
+    statementCount: statements.length,
+    statements: statements.map((statement) => {
+      const raw = statement?.stmt;
+      const kind = raw ? Object.keys(raw)[0] : null;
+
+      return {
+        kind: kind ?? null,
+        raw,
+      };
+    }),
+    raw: parsed,
+  };
+}
+
 export function createAstParser(version) {
   if (!isSupportedVersion(version)) {
     throw new Error(`Unsupported PostgreSQL parser version: ${version}`);
@@ -30,15 +50,7 @@ export function createAstParser(version) {
 
       const parsed = await parser.parse(raw);
 
-      return {
-        parserVersion: version,
-        statementCount: parsed.stmts.length,
-        statements: parsed.stmts.map((statement) => ({
-          kind: Object.keys(statement.stmt)[0],
-          raw: statement.stmt,
-        })),
-        raw: parsed,
-      };
+      return normalizeAstParserResult(parsed, version);
     },
   };
 }

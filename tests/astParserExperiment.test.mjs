@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   createAstParser,
   getSupportedAstParserVersions,
+  normalizeAstParserResult,
 } from '../src/astParserExperiment.mjs';
 
 test('supports PostgreSQL versions 13 through 18', () => {
@@ -37,4 +38,15 @@ test('rejects non-string SQL input', async () => {
     () => parser.parse(42),
     new Error('SQL must be a non-empty string.'),
   );
+});
+
+test('normalizes optional AST fields without throwing', () => {
+  const result = normalizeAstParserResult({ stmts: [null, {}] }, 16);
+
+  assert.equal(result.parserVersion, 16);
+  assert.equal(result.statementCount, 2);
+  assert.deepEqual(result.statements, [
+    { kind: null, raw: undefined },
+    { kind: null, raw: undefined },
+  ]);
 });
