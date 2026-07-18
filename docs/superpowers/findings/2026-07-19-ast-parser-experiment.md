@@ -41,6 +41,14 @@ Environment recorded by the runner:
 
 Node 22 verification was not available in this environment: the measured runtime was Node 24.14.0. Docker CLI 29.5.2 was present, but no parser container run was performed. Therefore Node 22 and Docker/WASM loading remain explicit compatibility limitations, not passing gates.
 
+Verification evidence:
+
+```powershell
+npm run --silent benchmark:ast -- --version 16 --iterations 100 --warmup 20
+```
+
+The command's stdout was valid JSON, and the malformed-fixture checks passed: parser-dependent phases recorded controlled syntax errors while the heuristic phase recorded policy rejections. The full worktree `npm test` completed with 148 passed and 0 failed. The parent-root baseline `npm test` completed with 130 passed and 0 failed.
+
 ## Fixed fixtures and correctness
 
 The identical ten-fixture workload was used for every parser version: small select, medium join, CTE/window query, bounded update, writable CTE, `DROP TABLE`, `set_config`, stacked selects, dollar-quoted literal, and malformed `SELECT FROM`. Fixture sizes ranged from 11 to 193 UTF-8 bytes.
