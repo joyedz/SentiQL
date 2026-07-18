@@ -44,7 +44,7 @@ Run:
 node -e "const { getSupportedVersions } = require('@pgsql/parser'); console.log(getSupportedVersions())"
 ```
 
-Expected: output includes `13`, `14`, `15`, `16`, `17`, and `18`; the original experiment target remains 13–17, with PG18 available for additional compatibility coverage.
+Expected: output includes `[13, 14, 15, 16, 17, 18]`; the original experiment target remains 13–17, with PG18 available for additional compatibility coverage.
 
 - [ ] **Step 4: Run the existing suite**
 
