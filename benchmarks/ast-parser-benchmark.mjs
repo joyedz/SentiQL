@@ -1,5 +1,6 @@
 import { createRequire } from 'node:module';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 import { fixtures } from './ast-parser-fixtures.mjs';
@@ -44,21 +45,24 @@ function parseArguments(argv) {
 
 function percentile(values, percentileValue) {
   const sorted = [...values].sort((a, b) => a - b);
-  const index = Math.min(sorted.length - 1, Math.floor((percentileValue / 100) * sorted.length));
-  return sorted[index];
+  const nearestRankIndex = Math.ceil((percentileValue / 100) * sorted.length) - 1;
+  return sorted[Math.max(0, Math.min(sorted.length - 1, nearestRankIndex))];
 }
 
-function summarizeTimings(durations) {
-  if (durations.length === 0) return { samples: 0, errors: 0 };
+function metric(durations, errors) {
+  const successful = durations.length > 0;
   const total = durations.reduce((sum, duration) => sum + duration, 0);
+  const firstError = errors[0];
   return {
     samples: durations.length,
-    min: Math.min(...durations),
-    p50: percentile(durations, 50),
-    p95: percentile(durations, 95),
-    p99: percentile(durations, 99),
-    max: Math.max(...durations),
-    operationsPerSecond: Number((durations.length * 1e9 / total).toFixed(3)),
+    errors: errors.length,
+    error: firstError ? String(firstError.message ?? firstError) : null,
+    min: successful ? Math.min(...durations) : null,
+    p50: successful ? percentile(durations, 50) : null,
+    p95: successful ? percentile(durations, 95) : null,
+    p99: successful ? percentile(durations, 99) : null,
+    max: successful ? Math.max(...durations) : null,
+    operationsPerSecond: successful ? Number((durations.length * 1e9 / total).toFixed(3)) : null,
   };
 }
 
@@ -71,80 +75,142 @@ async function timed(operation) {
   }
 }
 
-function parserPackageVersion() {
-  const entry = require.resolve('@pgsql/parser');
-  let directory = path.dirname(entry);
-  while (path.basename(directory) !== '@pgsql') directory = path.dirname(directory);
-  return JSON.parse(readFileSync(path.join(directory, 'parser', 'package.json'), 'utf8')).version;
+async function measure(iterations, operation) {
+  const durations = [];
+  const errors = [];
+  for (let iteration = 0; iteration < iterations; iteration += 1) {
+    const result = await timed(operation);
+    if (result.error) errors.push(result.error);
+    else durations.push(result.duration);
+  }
+  return metric(durations, errors);
 }
 
-async function runBenchmark({ version, iterations, warmup }) {
-  const construction = await timed(async () => {
+async function warmup(count, operation) {
+  for (let iteration = 0; iteration < count; iteration += 1) {
+    try {
+      await operation();
+    } catch {
+      // Warmup failures are represented by the timed phase and never abort a run.
+    }
+  }
+}
+
+function heapUsedAfterGc() {
+  if (typeof global.gc !== 'function') return null;
+  global.gc();
+  return process.memoryUsage().heapUsed;
+}
+
+function parserPackageRoot() {
+  let directory = path.dirname(require.resolve('@pgsql/parser'));
+  while (path.basename(directory) !== '@pgsql') directory = path.dirname(directory);
+  return path.join(directory, 'parser');
+}
+
+function packageImpact() {
+  const root = parserPackageRoot();
+  let installedSizeBytes = 0;
+  let installedFileCount = 0;
+  function visit(directory) {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const entryPath = path.join(directory, entry.name);
+      if (entry.isDirectory()) visit(entryPath);
+      else if (entry.isFile()) {
+        installedFileCount += 1;
+        installedSizeBytes += statSync(entryPath).size;
+      }
+    }
+  }
+  visit(root);
+  const packageJson = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'));
+  return {
+    packageVersion: packageJson.version,
+    installedSizeBytes,
+    installedFileCount,
+    dependencyCount: Object.keys(packageJson.dependencies ?? {}).length,
+  };
+}
+
+async function runBenchmark({ version, iterations, warmup: warmupCount }) {
+  const heapBeforeBytes = heapUsedAfterGc();
+  const initialization = await timed(async () => {
     const parser = createAstParser(version);
+    await parser.load();
     return parser;
   });
-  if (construction.error) throw construction.error;
+  const heapAfterBytes = heapUsedAfterGc();
+  if (initialization.error) throw initialization.error;
 
-  const parser = construction.value;
+  const parser = initialization.value;
+  const initialized = new Map();
   const coldParse = {};
   const warmParse = {};
   const astSummary = {};
+  const combinedParseAstSummary = {};
   const heuristicPolicy = {};
 
   for (const fixture of fixtures) {
-    const cold = await timed(() => parser.parse(fixture.sql));
-    coldParse[fixture.name] = cold.error
-      ? { samples: 0, errors: 1, error: String(cold.error.message ?? cold.error), duration: cold.duration }
-      : { ...summarizeTimings([cold.duration]), errors: 0 };
-  }
-
-  for (let iteration = 0; iteration < warmup; iteration += 1) {
-    for (const fixture of fixtures) await parser.parse(fixture.sql).catch(() => undefined);
-    for (const fixture of fixtures) {
-      const summary = await timed(async () => {
-        const parsed = await parser.parse(fixture.sql);
-        return summarizeAst(parsed);
-      });
-      if (summary.error) continue;
-      evaluatePolicy(fixture.sql, { mode: 'read-write' });
+    const result = await timed(() => parser.parse(fixture.sql));
+    if (result.error) {
+      coldParse[fixture.name] = metric([], [result.error]);
+    } else {
+      initialized.set(fixture.name, result.value);
+      coldParse[fixture.name] = metric([result.duration], []);
     }
   }
 
   for (const fixture of fixtures) {
-    const parseDurations = [];
-    const summaryDurations = [];
-    const policyDurations = [];
-    let parseErrors = 0;
-    for (let iteration = 0; iteration < iterations; iteration += 1) {
-      const parsed = await timed(() => parser.parse(fixture.sql));
-      parseDurations.push(parsed.duration);
-      if (parsed.error) {
-        parseErrors += 1;
-      } else {
-        const summary = await timed(() => summarizeAst(parsed.value));
-        summaryDurations.push(summary.duration);
-      }
-      const policy = await timed(() => evaluatePolicy(fixture.sql, { mode: 'read-write' }));
-      policyDurations.push(policy.duration);
-    }
-    warmParse[fixture.name] = { ...summarizeTimings(parseDurations), errors: parseErrors };
-    astSummary[fixture.name] = { ...summarizeTimings(summaryDurations), errors: iterations - summaryDurations.length };
-    heuristicPolicy[fixture.name] = { ...summarizeTimings(policyDurations), errors: 0 };
+    await warmup(warmupCount, () => parser.parse(fixture.sql));
+    warmParse[fixture.name] = await measure(iterations, () => parser.parse(fixture.sql));
   }
 
+  for (const fixture of fixtures) {
+    const parsed = initialized.get(fixture.name);
+    await warmup(warmupCount, () => {
+      if (!parsed) throw new Error('No AST available because parsing failed.');
+      return summarizeAst(parsed);
+    });
+    astSummary[fixture.name] = await measure(iterations, () => {
+      if (!parsed) throw new Error('No AST available because parsing failed.');
+      return summarizeAst(parsed);
+    });
+  }
+
+  for (const fixture of fixtures) {
+    await warmup(warmupCount, async () => summarizeAst(await parser.parse(fixture.sql)));
+    combinedParseAstSummary[fixture.name] = await measure(iterations, async () => summarizeAst(await parser.parse(fixture.sql)));
+  }
+
+  for (const fixture of fixtures) {
+    await warmup(warmupCount, () => evaluatePolicy(fixture.sql, { mode: 'read-write' }));
+    heuristicPolicy[fixture.name] = await measure(iterations, () => evaluatePolicy(fixture.sql, { mode: 'read-write' }));
+  }
+
+  const impact = packageImpact();
   return {
     nodeVersion: process.version,
     platform: process.platform,
     architecture: process.arch,
-    parserPackageVersion: parserPackageVersion(),
+    cpuCount: os.cpus().length,
+    garbageCollectionAvailable: typeof global.gc === 'function',
+    parserPackageVersion: impact.packageVersion,
     parserVersion: version,
     iterations,
-    warmup,
+    warmup: warmupCount,
     fixtureMetadata: fixtures.map(({ name, category, sql }) => ({ name, category, bytes: Buffer.byteLength(sql, 'utf8') })),
+    packageImpact: impact,
+    memory: {
+      heapBeforeBytes,
+      heapAfterBytes,
+      heapDeltaBytes: heapBeforeBytes === null || heapAfterBytes === null ? null : heapAfterBytes - heapBeforeBytes,
+    },
     metrics: {
-      coldParse: { parserConstruction: { ...summarizeTimings([construction.duration]), errors: 0 }, fixtures: coldParse },
+      initialization: { ...metric([initialization.duration], []), heapBeforeBytes, heapAfterBytes },
+      coldParse,
       warmParse,
       astSummary,
+      combinedParseAstSummary,
       heuristicPolicy,
     },
   };

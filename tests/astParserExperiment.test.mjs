@@ -39,6 +39,14 @@ test('parses SELECT 1 with a versioned AST contract', async () => {
   assert.ok(result.statements[0].raw && result.statements[0].raw.SelectStmt);
 });
 
+test('explicitly loads the selected parser before the first parse', async () => {
+  const parser = createAstParser(16);
+
+  await parser.load();
+
+  assert.equal(await parser.parse('SELECT 1').then(result => result.statementCount), 1);
+});
+
 test('rejects non-string SQL input', async () => {
   const parser = createAstParser(16);
 

@@ -98,6 +98,9 @@ export function createAstParser(version) {
   return {
     version: parser.version,
     ready: parser.ready,
+    async load() {
+      await parser.loadParser();
+    },
     async parse(sql) {
       if (typeof sql !== 'string' || !sql.trim()) {
         throw new Error('SQL must be a non-empty string.');

@@ -352,10 +352,10 @@ Add this script to `package.json`:
 Run:
 
 ```powershell
-npm run benchmark:ast -- --version 16 --iterations 100 --warmup 20
+npm run --silent benchmark:ast -- --version 16 --iterations 100 --warmup 20
 ```
 
-Expected: valid JSON containing all fixtures and separate `coldParse`, `warmParse`, `astSummary`, and `heuristicPolicy` metrics.
+Expected: valid JSON containing all fixtures and separate `initialization`, `coldParse`, `warmParse`, `astSummary`, `combinedParseAstSummary`, and `heuristicPolicy` metrics, plus package and optional heap measurements.
 
 - [ ] **Step 5: Commit the benchmark harness**
 
@@ -375,7 +375,7 @@ Run each supported parser version with the same workload:
 
 ```powershell
 New-Item -ItemType Directory -Force benchmark-results | Out-Null
-13,14,15,16,17,18 | ForEach-Object { npm run benchmark:ast -- --version $_ --iterations 5000 --warmup 500 | Set-Content "benchmark-results/pg$_.json" }
+13,14,15,16,17,18 | ForEach-Object { npm run --silent benchmark:ast -- --version $_ --iterations 5000 --warmup 500 | Set-Content "benchmark-results/pg$_.json" }
 ```
 
 Expected: six JSON result files with identical fixture names and metric fields.
@@ -443,7 +443,7 @@ Run:
 
 ```powershell
 npm test
-npm run benchmark:ast -- --version 16 --iterations 1000 --warmup 100
+npm run --silent benchmark:ast -- --version 16 --iterations 1000 --warmup 100
 git diff main...HEAD --check
 git status --short
 ```
