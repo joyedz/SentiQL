@@ -49,13 +49,20 @@ function percentile(values, percentileValue) {
   return sorted[Math.max(0, Math.min(sorted.length - 1, nearestRankIndex))];
 }
 
-function metric(durations, errors) {
+function metric(durations, errors, rejections = []) {
   const successful = durations.length > 0;
   const total = durations.reduce((sum, duration) => sum + duration, 0);
   const firstError = errors[0];
+  const rejectionReasons = {};
+  for (const reason of rejections) {
+    const key = String(reason ?? 'Policy rejected without a reason.');
+    rejectionReasons[key] = (rejectionReasons[key] ?? 0) + 1;
+  }
   return {
     samples: durations.length,
     errors: errors.length,
+    rejections: rejections.length,
+    rejectionReasons,
     error: firstError ? String(firstError.message ?? firstError) : null,
     min: successful ? Math.min(...durations) : null,
     p50: successful ? percentile(durations, 50) : null,
@@ -75,15 +82,24 @@ async function timed(operation) {
   }
 }
 
-async function measure(iterations, operation) {
+async function measure(iterations, operation, classifyResult = () => null) {
   const durations = [];
   const errors = [];
+  const rejections = [];
   for (let iteration = 0; iteration < iterations; iteration += 1) {
     const result = await timed(operation);
     if (result.error) errors.push(result.error);
-    else durations.push(result.duration);
+    else {
+      durations.push(result.duration);
+      const rejection = classifyResult(result.value);
+      if (rejection) rejections.push(rejection);
+    }
   }
-  return metric(durations, errors);
+  return metric(durations, errors, rejections);
+}
+
+function policyRejectionReason(result) {
+  return result?.decision === 'deny' ? result.reason : null;
 }
 
 async function warmup(count, operation) {
@@ -184,7 +200,11 @@ async function runBenchmark({ version, iterations, warmup: warmupCount }) {
 
   for (const fixture of fixtures) {
     await warmup(warmupCount, () => evaluatePolicy(fixture.sql, { mode: 'read-write' }));
-    heuristicPolicy[fixture.name] = await measure(iterations, () => evaluatePolicy(fixture.sql, { mode: 'read-write' }));
+    heuristicPolicy[fixture.name] = await measure(
+      iterations,
+      () => evaluatePolicy(fixture.sql, { mode: 'read-write' }),
+      policyRejectionReason,
+    );
   }
 
   const impact = packageImpact();
