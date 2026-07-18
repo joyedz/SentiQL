@@ -2,6 +2,32 @@
 
 SentiQL is a self-hosted semantic firewall for AI-agent-to-PostgreSQL access. It authenticates workload identity, authorizes typed capabilities against a versioned policy bundle, compiles bounded SQL, enforces PostgreSQL RLS, writes every decision to a local SQLite audit log, and includes a small internal audit console.
 
+## Why SentiQL
+
+SentiQL gives agents a governed semantic boundary instead of unrestricted database access. An agent requests an approved business capability—such as reading support cases or changing a case status—not an arbitrary table, column, tenant predicate, or SQL statement. SentiQL maps that request to a versioned policy, generates bounded parameterized SQL, and lets PostgreSQL enforce the final row boundary through RLS.
+
+Its advantage is defense in depth across the full request path:
+
+- **Intent-bound access:** every operation declares a purpose and uses a typed capability with an authorized resource, field set, selector, and limit.
+- **Identity-bound authorization:** tenant, organization, subject, and roles come from a verified short-lived OIDC workload token, never from tool arguments.
+- **Database-enforced isolation:** least-privilege PostgreSQL credentials and transaction-local RLS context protect rows even if an upstream policy check is bypassed.
+- **Bounded agent behavior:** read-only transactions, safe SQL compilation, mutation limits, approval gates, and fail-closed validation constrain what an agent can do.
+- **Explainable operations:** policy version/hash, identity, purpose, decision, database outcome, and correlation ID are recorded for every request.
+
+```text
+Agent intent
+    ↓
+Verified identity + semantic policy
+    ↓
+Bounded SQL compiler
+    ↓
+PostgreSQL role + RLS
+    ↓
+Audited result
+```
+
+“Semantic” means that authorization is expressed in terms of governed resources and capabilities, rather than only SQL syntax. The policy remains deterministic and reviewable; the agent does not get to redefine what its identity or tenant means.
+
 ## Prerequisites and local setup
 
 Use Node.js 22 or newer and Docker Compose.
