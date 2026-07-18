@@ -73,6 +73,60 @@ test('raw compatibility scopes execution and audits principal identity', async (
   assert.equal(audits[0].sql.includes('secret-value'), false);
 });
 
+test('raw compatibility writes clientSessionId to every audit entry', async () => {
+  const audits = [];
+  const result = await processRawCompatibilityRequest({
+    sql: "SELECT 'session-aware'",
+    clientSessionId: 'client-session-123',
+  }, {
+    createCorrelationId: () => 'raw-session-correlation',
+    getToken: async () => 'signed-token',
+    verifyIdentity: async () => principal,
+    execute: async () => ({ rows: [], command: 'SELECT', rowCount: 0 }),
+    audit: { record: (entry) => audits.push(entry) },
+    breakGlassReason: 'incident-session',
+  });
+
+  assert.equal(result.isError, undefined);
+  assert.ok(audits.length > 0);
+  assert.ok(audits.every((entry) => entry.sessionId === 'client-session-123'));
+});
+
+test('raw compatibility prefers clientSessionId when both session fields are present', async () => {
+  const audits = [];
+  await processRawCompatibilityRequest({
+    sql: 'SELECT 1',
+    clientSessionId: 'preferred-client-session',
+    codexSessionId: 'legacy-codex-session',
+  }, {
+    getToken: async () => 'signed-token',
+    verifyIdentity: async () => principal,
+    execute: async () => ({ rows: [], command: 'SELECT', rowCount: 0 }),
+    audit: { record: (entry) => audits.push(entry) },
+    breakGlassReason: 'incident-precedence',
+  });
+
+  assert.ok(audits.length > 0);
+  assert.ok(audits.every((entry) => entry.sessionId === 'preferred-client-session'));
+});
+
+test('raw compatibility remains compatible with legacy codexSessionId', async () => {
+  const audits = [];
+  await processRawCompatibilityRequest({
+    sql: 'SELECT 1',
+    codexSessionId: 'legacy-codex-session',
+  }, {
+    getToken: async () => 'signed-token',
+    verifyIdentity: async () => principal,
+    execute: async () => ({ rows: [], command: 'SELECT', rowCount: 0 }),
+    audit: { record: (entry) => audits.push(entry) },
+    breakGlassReason: 'incident-legacy',
+  });
+
+  assert.ok(audits.length > 0);
+  assert.ok(audits.every((entry) => entry.sessionId === 'legacy-codex-session'));
+});
+
 test('raw compatibility denies attempts to mutate the RLS context', async () => {
   let executed = false;
   const result = await processRawCompatibilityRequest({ sql: "SELECT set_config('app.tenant_id', 'tenant-b', true)" }, {

@@ -199,6 +199,69 @@ test('rejects identity spoofing, tenant escalation, unauthorized fields, and dis
   }
 });
 
+test('typed authorization strips client session metadata and redacts spoofed identity metadata from audit output', async () => {
+  let authorizedRequest;
+  const audits = [];
+  const spoofedIdentity = {
+    token: 'spoof-token',
+    subject: 'spoof-subject',
+    organization: 'spoof-organization',
+    tenantId: 'spoof-tenant',
+    roles: ['admin'],
+  };
+  const result = await processCapabilityRequest({
+    ...allowedRead,
+    clientSessionId: 'neutral-client-session',
+    codexSessionId: 'legacy-codex-session',
+    ...spoofedIdentity,
+  }, dependencies({
+    authorize: (request) => {
+      authorizedRequest = request;
+      return { decision: 'deny', reason: 'release-gate denial' };
+    },
+    audit: { record: (entry) => audits.push(entry) },
+  }));
+
+  assert.equal(payload(result).decision, 'deny');
+  assert.equal('clientSessionId' in authorizedRequest, false);
+  assert.equal('codexSessionId' in authorizedRequest, false);
+  const serializedAudits = JSON.stringify(audits);
+  for (const value of Object.values(spoofedIdentity)) {
+    assert.equal(serializedAudits.includes(JSON.stringify(value).slice(1, -1)), false);
+  }
+  assert.equal(audits.at(-1).subject, principal.subject);
+  assert.equal(audits.at(-1).organization, principal.organization);
+});
+
+test('real policy denies typed requests with spoofed identity metadata', async () => {
+  const spoofedFields = {
+    token: 'spoof-token',
+    subject: 'spoof-subject',
+    organization: 'spoof-organization',
+    tenantId: 'spoof-tenant',
+    roles: ['admin'],
+  };
+
+  for (const [field, value] of Object.entries(spoofedFields)) {
+    let compiled = false;
+    let executed = false;
+    const audits = [];
+    const result = await processCapabilityRequest({
+      ...allowedRead,
+      [field]: value,
+    }, dependencies({
+      compile: () => { compiled = true; },
+      execute: async () => { executed = true; },
+      audit: { record: (entry) => audits.push(entry) },
+    }));
+
+    assert.equal(payload(result).decision, 'deny', `spoofed ${field} was authorized`);
+    assert.equal(compiled, false, `spoofed ${field} reached compilation`);
+    assert.equal(executed, false, `spoofed ${field} reached execution`);
+    assert.equal(audits.at(-1).decision, 'deny', `spoofed ${field} was not denied in audit`);
+  }
+});
+
 test('raw SQL cannot bypass the typed firewall and is disabled by default', async () => {
   let executed = false;
   const audits = [];

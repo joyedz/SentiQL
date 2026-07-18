@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { processCapabilityRequest, processQuery } from '../src/server.mjs';
+import { processCapabilityRequest, processQuery, processRawCompatibilityRequest, startServer } from '../src/server.mjs';
 
 const principal = { subject: 'subject-1', organization: 'org-1', tenantId: 'tenant-1', roles: ['agent'] };
 const policy = {
@@ -26,6 +26,104 @@ function capabilityDeps(overrides = {}) {
     ...overrides,
   };
 }
+
+test('uses clientSessionId for query audit metadata', async () => {
+  const entries = [];
+  await processQuery(
+    { sql: 'SELECT 1', clientSessionId: 'client-1' },
+    {
+      audit: { record: (entry) => entries.push(entry) },
+      execute: async () => ({ rows: [], command: 'SELECT', rowCount: 0 }),
+    },
+  );
+
+  assert.equal(entries[0].sessionId, 'client-1');
+});
+
+test('uses codexSessionId for raw compatibility audit metadata', async () => {
+  const entries = [];
+  await processRawCompatibilityRequest(
+    { sql: 'SELECT 1', codexSessionId: 'legacy-1' },
+    {
+      breakGlassReason: 'incident response',
+      createCorrelationId: () => 'corr-raw-1',
+      getToken: async () => 'token',
+      verifyIdentity: async () => principal,
+      execute: async () => ({ rows: [], command: 'SELECT', rowCount: 0 }),
+      audit: { record: (entry) => entries.push(entry) },
+    },
+  );
+
+  assert.equal(entries.at(-1).sessionId, 'legacy-1');
+});
+
+test('prefers clientSessionId over codexSessionId', async () => {
+  const entries = [];
+  await processQuery(
+    { sql: 'SELECT 1', clientSessionId: 'client-1', codexSessionId: 'legacy-1' },
+    {
+      audit: { record: (entry) => entries.push(entry) },
+      execute: async () => ({ rows: [], command: 'SELECT', rowCount: 0 }),
+    },
+  );
+
+  assert.equal(entries[0].sessionId, 'client-1');
+});
+
+test('does not pass session metadata to typed authorization', async () => {
+  let authorizedRequest;
+  await processCapabilityRequest(
+    {
+      capability: 'data.read',
+      resource: 'cases',
+      purpose: 'support',
+      fields: ['id'],
+      clientSessionId: 'client-1',
+      codexSessionId: 'legacy-1',
+    },
+    capabilityDeps({
+      authorize: (request) => {
+        authorizedRequest = request;
+        return { decision: 'deny', reason: 'Denied.' };
+      },
+    }),
+  );
+
+  assert.equal('clientSessionId' in authorizedRequest, false);
+  assert.equal('codexSessionId' in authorizedRequest, false);
+});
+
+test('registered raw query schema accepts clientSessionId', async () => {
+  const previousRaw = process.env.ENABLE_RAW_QUERY_COMPATIBILITY;
+  const previousReason = process.env.RAW_QUERY_BREAK_GLASS_REASON;
+  const previousPostgres = process.env.POSTGRES_URL;
+  try {
+    process.env.ENABLE_RAW_QUERY_COMPATIBILITY = 'true';
+    process.env.RAW_QUERY_BREAK_GLASS_REASON = 'test registration';
+    process.env.POSTGRES_URL = 'postgresql://example';
+    const result = await startServer({
+      policy,
+      database: { executeCompiled: async () => ({ rows: [], rowCount: 0 }), close: async () => {} },
+      audit: { record: () => {}, close: () => {} },
+      verifyIdentity: async () => principal,
+      getToken: async () => 'token',
+      transport: { async start() {}, async send() {}, async close() {} },
+    });
+
+    const parsed = result.server._registeredTools.query.inputSchema.parse({
+      sql: 'SELECT 1',
+      clientSessionId: 'client-1',
+    });
+    assert.equal(parsed.clientSessionId, 'client-1');
+  } finally {
+    if (previousRaw === undefined) delete process.env.ENABLE_RAW_QUERY_COMPATIBILITY;
+    else process.env.ENABLE_RAW_QUERY_COMPATIBILITY = previousRaw;
+    if (previousReason === undefined) delete process.env.RAW_QUERY_BREAK_GLASS_REASON;
+    else process.env.RAW_QUERY_BREAK_GLASS_REASON = previousReason;
+    if (previousPostgres === undefined) delete process.env.POSTGRES_URL;
+    else process.env.POSTGRES_URL = previousPostgres;
+  }
+});
 
 test('fails closed when verified identity is null', async () => {
   let executed = false;

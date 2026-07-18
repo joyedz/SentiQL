@@ -23,6 +23,13 @@ function auditSqlDigest(sql) {
   return typeof sql === 'string' ? `sha256:${createHash('sha256').update(sql, 'utf8').digest('hex')}` : null;
 }
 
+function clientSessionId(input) {
+  if (!input || typeof input !== 'object') return null;
+  if (typeof input.clientSessionId === 'string' && input.clientSessionId.trim()) return input.clientSessionId;
+  if (typeof input.codexSessionId === 'string' && input.codexSessionId.trim()) return input.codexSessionId;
+  return null;
+}
+
 export function resolveAuditPath(auditPath) {
   return isAbsolute(auditPath) ? auditPath : resolve(projectRoot, auditPath);
 }
@@ -35,8 +42,8 @@ export async function processQuery(
   input,
   { mode = 'read-only', audit, execute, logError = (message) => console.error(message) },
 ) {
-  const { sql, codexSessionId } = input;
-  const sessionId = codexSessionId ?? null;
+  const { sql } = input;
+  const sessionId = clientSessionId(input);
   const policy = evaluatePolicy(sql, { mode });
 
   if (policy.decision === 'deny') {
@@ -119,7 +126,7 @@ export async function processRawCompatibilityRequest(input, dependencies = {}) {
     sql: auditSqlDigest(input?.sql),
     databaseOutcome: null,
     rowCount: null,
-    sessionId: input?.codexSessionId ?? null,
+    sessionId: clientSessionId(input),
   };
   const record = (entry) => {
     if (!audit || typeof audit.record !== 'function') throw new Error('Audit unavailable.');
@@ -240,7 +247,7 @@ export async function processCapabilityRequest(input, dependencies = {}) {
   const correlationId = createCorrelationId();
   const policy = dependencies.policy;
   const audit = dependencies.audit;
-  const sessionId = input?.codexSessionId ?? null;
+  const sessionId = clientSessionId(input);
   const baseAudit = {
     correlationId,
     subject: null,
@@ -264,7 +271,10 @@ export async function processCapabilityRequest(input, dependencies = {}) {
     return response({ correlationId, decision: 'deny', reason: 'Policy unavailable.', policyVersion: null, policyHash: null }, true);
   }
   const requestInput = input && typeof input === 'object' ? { ...input } : input;
-  if (requestInput && typeof requestInput === 'object') delete requestInput.codexSessionId;
+  if (requestInput && typeof requestInput === 'object') {
+    delete requestInput.clientSessionId;
+    delete requestInput.codexSessionId;
+  }
 
   let principal;
   try {
@@ -433,7 +443,7 @@ export async function startServer(overrides = {}) {
     server.registerTool('query', {
       title: 'Governed PostgreSQL query (compatibility mode)',
       description: 'Compatibility-only raw SQL access; prefer typed capability tools.',
-      inputSchema: { sql: z.string(), codexSessionId: z.string().optional() },
+      inputSchema: { sql: z.string(), clientSessionId: z.string().optional(), codexSessionId: z.string().optional() },
     }, (input) => processRawCompatibilityRequest(input, {
       mode: process.env.POLICY_MODE ?? 'read-only',
       audit,

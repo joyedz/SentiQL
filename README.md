@@ -1,6 +1,6 @@
 # SentiQL Semantic Firewall v1
 
-SentiQL is a self-hosted semantic firewall for Codex-to-PostgreSQL access. It authenticates workload identity, authorizes typed capabilities against a versioned policy bundle, compiles bounded SQL, enforces PostgreSQL RLS, writes every decision to a local SQLite audit log, and includes a small internal audit console.
+SentiQL is a self-hosted semantic firewall for AI-agent-to-PostgreSQL access. It authenticates workload identity, authorizes typed capabilities against a versioned policy bundle, compiles bounded SQL, enforces PostgreSQL RLS, writes every decision to a local SQLite audit log, and includes a small internal audit console.
 
 ## Prerequisites and local setup
 
@@ -51,7 +51,7 @@ data_mutate({ resource, action, selector: { field, op: "eq", value }, values: { 
 
 ```mermaid
 flowchart LR
-  C[Codex] --> M[Typed MCP capability tools]
+  C["AI agent / MCP client"] --> M[Typed MCP capability tools]
   M --> I[OIDC workload identity]
   I --> P[Semantic policy + purpose checks]
   P -->|deny or approval| A[(SQLite audit log)]
@@ -62,11 +62,11 @@ flowchart LR
   A --> H[Dashboard /api/audit]
 ```
 
-The MCP server boundary is the enforcement point: every database request sent through a typed capability tool must be authenticated, authorized, compiled, RLS-scoped, and audited before it can reach PostgreSQL. A Codex `PreToolUse` hook is not a substitute, because hooks do not reliably cover MCP tool calls.
+The MCP server boundary is the enforcement point: every database request sent through a typed capability tool must be authenticated, authorized, compiled, RLS-scoped, and audited before it can reach PostgreSQL. Client-side hooks and controls are supplementary and do not replace enforcement at the MCP server boundary.
 
 Typed reads and aggregates start a transaction and issue `SET TRANSACTION READ ONLY` before setting the verified RLS context. Raw compatibility queries (when explicitly enabled) also require a verified OIDC principal, start `BEGIN`, set the transaction read-only mode when configured, and establish the transaction-local RLS context before executing SQL. The lexical policy rejects context-mutating `set_config` calls so raw SQL cannot replace the verified tenant GUC. In production, use a PostgreSQL credential with a read-only database role as well. The database role and transaction are defense in depth if policy parsing is bypassed or a side-effecting `SELECT` function is attempted; policy validation remains the first boundary.
 
-## Register with Codex
+## Current client: Codex
 
 Register the MCP server with absolute paths to both the environment file and server. This is important because Codex can launch MCP processes from a directory other than the project root:
 
@@ -83,6 +83,10 @@ args = ["--env-file=/absolute/path/to/sentiql/.env", "/absolute/path/to/sentiql/
 ```
 
 Replace both placeholder paths with your own absolute paths. `POSTGRES_URL` is required when the production MCP server starts.
+
+## Client support roadmap
+
+SentiQL currently supports Codex through MCP. Planned client integrations include Claude Code, Gemini CLI, and OpenCode. The governed capability tools, policy engine, identity verification, PostgreSQL RLS, and audit model are designed to remain client-neutral.
 
 ## Environment
 

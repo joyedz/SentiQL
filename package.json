@@ -1,7 +1,7 @@
 {
   "name": "sentiql",
   "version": "1.0.0",
-  "description": "Governed PostgreSQL MCP server and audit console for Codex.",
+  "description": "Governed PostgreSQL MCP server and audit console for AI agents.",
   "type": "module",
   "engines": {
     "node": ">=22"
