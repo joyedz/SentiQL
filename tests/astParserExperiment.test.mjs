@@ -18,6 +18,7 @@ test('parses SELECT 1 with a versioned AST contract', async () => {
   assert.ok(parser.ready instanceof Promise);
   assert.equal(result.parserVersion, 16);
   assert.equal(result.statementCount, 1);
-  assert.deepEqual(result.statements, [{ kind: 'SelectStmt', raw: 'SELECT 1' }]);
-  assert.equal(result.raw, 'SELECT 1');
+  assert.ok(result.raw && Array.isArray(result.raw.stmts));
+  assert.equal(result.statements[0].kind, 'SelectStmt');
+  assert.ok(result.statements[0].raw && result.statements[0].raw.SelectStmt);
 });

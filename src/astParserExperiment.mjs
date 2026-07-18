@@ -25,19 +25,15 @@ export function createAstParser(version) {
       }
 
       const parsed = await parser.parse(raw);
-      const rawStatements = raw
-        .split(';')
-        .map((statement) => statement.trim())
-        .filter(Boolean);
 
       return {
         parserVersion: version,
         statementCount: parsed.stmts.length,
-        statements: parsed.stmts.map((statement, index) => ({
+        statements: parsed.stmts.map((statement) => ({
           kind: Object.keys(statement.stmt)[0],
-          raw: rawStatements[index] ?? raw,
+          raw: statement.stmt,
         })),
-        raw,
+        raw: parsed,
       };
     },
   };
