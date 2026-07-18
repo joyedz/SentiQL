@@ -4,7 +4,7 @@
 
 **Goal:** Add an isolated, non-production AST parser experiment that compares PostgreSQL-versioned AST parsing with SentiQL's current heuristic policy and records reproducible correctness and latency results.
 
-**Architecture:** Add a small adapter around `@pgsql/parser` that selects PostgreSQL 13–17 parser versions and returns normalized metadata without exposing parser-specific ASTs to production code. Add tests for parser behavior and a standalone benchmark runner comparing cold initialization, warm parsing, AST traversal, and current heuristic evaluation; do not modify production request routing or policy decisions.
+**Architecture:** Add a small adapter around `@pgsql/parser` that selects the pinned package's PostgreSQL 13–18 parser versions and returns normalized metadata without exposing parser-specific ASTs to production code. The original experiment target was PostgreSQL 13–17; PG18 is available in `@pgsql/parser` 1.5.0 and should be included in compatibility evaluation. Add tests for parser behavior and a standalone benchmark runner comparing cold initialization, warm parsing, AST traversal, and current heuristic evaluation; do not modify production request routing or policy decisions.
 
 **Tech Stack:** Node.js 22 ESM, `@pgsql/parser`, `node:test`, `node:perf_hooks`, existing `evaluatePolicy`, npm lockfile.
 
@@ -41,10 +41,10 @@ Expected: npm adds `@pgsql/parser` to `package-lock.json` and reports no audit v
 Run:
 
 ```powershell
-node --input-type=module -e "import { getSupportedVersions } from '@pgsql/parser'; console.log(getSupportedVersions())"
+node -e "const { getSupportedVersions } = require('@pgsql/parser'); console.log(getSupportedVersions())"
 ```
 
-Expected: output includes `13`, `14`, `15`, `16`, and `17`.
+Expected: output includes `13`, `14`, `15`, `16`, `17`, and `18`; the original experiment target remains 13–17, with PG18 available for additional compatibility coverage.
 
 - [ ] **Step 4: Run the existing suite**
 
@@ -107,10 +107,13 @@ Expected: fail because `src/astParserExperiment.mjs` does not yet export the ada
 
 - [ ] **Step 3: Implement the minimal parser adapter**
 
-Implement `src/astParserExperiment.mjs` with this contract:
+Implement `src/astParserExperiment.mjs` with this contract. Because this adapter is ESM and the package's ESM entry currently fails under Node.js 24 due to an extensionless internal import, use `createRequire()` to access the package's working CommonJS entry. Do not change production code to accommodate this experiment-only package compatibility constraint.
 
 ```js
-import Parser, { getSupportedVersions, isSupportedVersion } from '@pgsql/parser';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
+const { Parser, getSupportedVersions, isSupportedVersion } = require('@pgsql/parser');
 
 export function getSupportedAstParserVersions() {
   return [...getSupportedVersions()];
@@ -441,4 +444,3 @@ Expected: tests pass, benchmark emits JSON, diff check is clean, and only intend
 - [ ] **Step 3: Report the worktree, commits, benchmark command, and recommendation**
 
 The handoff must link to the adapter, tests, benchmark runner, and findings document, state measured latency, and clearly say whether AST parsing is ready for a production migration or needs more investigation.
-

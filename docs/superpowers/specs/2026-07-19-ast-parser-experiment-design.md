@@ -16,7 +16,7 @@ The experiment will:
 
 - run in an isolated git worktree;
 - add a version-aware parser adapter using `@pgsql/parser`;
-- support the parser versions exposed by the selected dependency, initially PostgreSQL 13 through 17;
+- support the parser versions exposed by the pinned dependency, PostgreSQL 13 through 18; the original experiment target was PostgreSQL 13 through 17, and PostgreSQL 18 is available in `@pgsql/parser` 1.5.0;
 - expose a small normalized parse result for benchmark and policy experiments;
 - compare current heuristic evaluation with AST parsing and AST traversal;
 - benchmark cold initialization, warm parsing, AST traversal, and end-to-end policy evaluation;
@@ -53,7 +53,9 @@ The normalized layer will keep parser-specific node names out of benchmark and p
 
 ## Dependency decision to evaluate
 
-`@pgsql/parser` is the leading candidate because it exposes version selection through one interface and uses PostgreSQL-derived parser builds. It currently advertises parser versions 13–17. The experiment will pin the dependency version and record its package size and transitive dependency count.
+`@pgsql/parser` is the leading candidate because it exposes version selection through one interface and uses PostgreSQL-derived parser builds. The experiment pins `@pgsql/parser` at version 1.5.0. That package exposes PostgreSQL parser versions 13–18; the original experiment target was 13–17, with PG18 available for compatibility evaluation. The experiment will record its package size and transitive dependency count.
+
+The experiment adapter is an ESM module, but the package's ESM entry currently fails under Node.js 24 because of an extensionless internal import. The adapter must therefore use `createRequire()` from `node:module` to access the package's working CommonJS entry. This workaround is experiment-only and must not change production code.
 
 The experiment will treat the following as decision inputs:
 
@@ -128,4 +130,3 @@ If these gates are not met, keep the current evaluator and consider AST parsing 
 - benchmark output with reproducible command;
 - compatibility/security comparison tests;
 - findings document with recommendation and measured results.
-
