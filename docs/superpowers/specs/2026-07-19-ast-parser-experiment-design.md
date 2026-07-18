@@ -92,7 +92,7 @@ Each benchmark will report:
 - query byte length;
 - process heap delta and parser artifact size where measurable.
 
-The benchmark will use a warm-up phase, a fixed iteration count, `process.hrtime.bigint()`, and explicit garbage collection only when Node is launched with `--expose-gc`. Results will include the Node.js version, operating system, CPU architecture, parser package version, and selected PostgreSQL parser version.
+The benchmark will use a warm-up phase, a fixed iteration count, `process.hrtime.bigint()`, and explicit garbage collection only when Node is launched with `--expose-gc`. Percentiles use the nearest-rank convention: rank `ceil((p / 100) * n)`, converted to zero-based index `rank - 1` and clamped to the sample range. Results will include the Node.js version, operating system, CPU architecture, parser package version, and selected PostgreSQL parser version, plus V8 heap-used and process RSS/external/array-buffer deltas when available.
 
 ## Correctness criteria
 

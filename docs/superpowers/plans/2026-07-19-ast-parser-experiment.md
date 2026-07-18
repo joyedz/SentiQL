@@ -327,12 +327,15 @@ The runner must:
 - print JSON so results can be saved and compared;
 - include Node version, platform, architecture, parser version, iteration count, and query byte size.
 
-Use `process.hrtime.bigint()` for durations and a stable percentile function:
+Use `process.hrtime.bigint()` for durations and a stable nearest-rank percentile function. For percentile `p` and sample count `n`, use one-based rank `ceil((p / 100) * n)`, convert to zero-based with `-1`, then clamp to `[0, n - 1]`:
 
 ```js
 function percentile(values, percentileValue) {
   const sorted = [...values].sort((a, b) => a - b);
-  const index = Math.min(sorted.length - 1, Math.floor((percentileValue / 100) * sorted.length));
+  const index = Math.max(0, Math.min(
+    sorted.length - 1,
+    Math.ceil((percentileValue / 100) * sorted.length) - 1,
+  ));
   return sorted[index];
 }
 ```
@@ -389,7 +392,7 @@ npm ls @pgsql/parser --all
 node --expose-gc benchmarks/ast-parser-benchmark.mjs --version 16 --iterations 1000 --warmup 1000
 ```
 
-Record dependency count, installed package size, first-load duration, and heap measurements if exposed by the runner.
+Record dependency count, installed package size/file count, first-load duration, V8 heap-used delta, and process RSS/external/array-buffer deltas when exposed by the runner. The benchmark must not report V8 heap-total memory as heap-used memory.
 
 - [ ] **Step 3: Run the full existing test suite plus parser tests**
 

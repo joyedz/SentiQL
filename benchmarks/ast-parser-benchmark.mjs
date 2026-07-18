@@ -45,6 +45,7 @@ function parseArguments(argv) {
 
 function percentile(values, percentileValue) {
   const sorted = [...values].sort((a, b) => a - b);
+  // Nearest-rank percentile: rank = ceil(p * n), converted to zero-based rank - 1.
   const nearestRankIndex = Math.ceil((percentileValue / 100) * sorted.length) - 1;
   return sorted[Math.max(0, Math.min(sorted.length - 1, nearestRankIndex))];
 }
@@ -112,10 +113,37 @@ async function warmup(count, operation) {
   }
 }
 
-function heapUsedAfterGc() {
-  if (typeof global.gc !== 'function') return null;
-  global.gc();
-  return process.memoryUsage().heapUsed;
+function processMemorySnapshot() {
+  const garbageCollectionAvailable = typeof global.gc === 'function';
+  if (garbageCollectionAvailable) global.gc();
+  const memory = process.memoryUsage();
+  return {
+    garbageCollectionAvailable,
+    v8HeapUsedBytes: garbageCollectionAvailable ? memory.heapUsed : null,
+    processRssBytes: memory.rss ?? null,
+    processExternalBytes: memory.external ?? null,
+    processArrayBuffersBytes: memory.arrayBuffers ?? null,
+  };
+}
+
+function memoryMetadata(before, after) {
+  const delta = (beforeValue, afterValue) => (
+    beforeValue === null || afterValue === null ? null : afterValue - beforeValue
+  );
+  return {
+    v8HeapUsedBeforeBytes: before.v8HeapUsedBytes,
+    v8HeapUsedAfterBytes: after.v8HeapUsedBytes,
+    v8HeapUsedDeltaBytes: delta(before.v8HeapUsedBytes, after.v8HeapUsedBytes),
+    processRssBeforeBytes: before.processRssBytes,
+    processRssAfterBytes: after.processRssBytes,
+    processRssDeltaBytes: delta(before.processRssBytes, after.processRssBytes),
+    processExternalBeforeBytes: before.processExternalBytes,
+    processExternalAfterBytes: after.processExternalBytes,
+    processExternalDeltaBytes: delta(before.processExternalBytes, after.processExternalBytes),
+    processArrayBuffersBeforeBytes: before.processArrayBuffersBytes,
+    processArrayBuffersAfterBytes: after.processArrayBuffersBytes,
+    processArrayBuffersDeltaBytes: delta(before.processArrayBuffersBytes, after.processArrayBuffersBytes),
+  };
 }
 
 function parserPackageRoot() {
@@ -149,13 +177,14 @@ function packageImpact() {
 }
 
 async function runBenchmark({ version, iterations, warmup: warmupCount }) {
-  const heapBeforeBytes = heapUsedAfterGc();
+  const memoryBefore = processMemorySnapshot();
   const initialization = await timed(async () => {
     const parser = createAstParser(version);
     await parser.load();
     return parser;
   });
-  const heapAfterBytes = heapUsedAfterGc();
+  const memoryAfter = processMemorySnapshot();
+  const memory = memoryMetadata(memoryBefore, memoryAfter);
   if (initialization.error) throw initialization.error;
 
   const parser = initialization.value;
@@ -213,20 +242,16 @@ async function runBenchmark({ version, iterations, warmup: warmupCount }) {
     platform: process.platform,
     architecture: process.arch,
     cpuCount: os.cpus().length,
-    garbageCollectionAvailable: typeof global.gc === 'function',
+    garbageCollectionAvailable: memoryBefore.garbageCollectionAvailable,
     parserPackageVersion: impact.packageVersion,
     parserVersion: version,
     iterations,
     warmup: warmupCount,
     fixtureMetadata: fixtures.map(({ name, category, sql }) => ({ name, category, bytes: Buffer.byteLength(sql, 'utf8') })),
     packageImpact: impact,
-    memory: {
-      heapBeforeBytes,
-      heapAfterBytes,
-      heapDeltaBytes: heapBeforeBytes === null || heapAfterBytes === null ? null : heapAfterBytes - heapBeforeBytes,
-    },
+    memory,
     metrics: {
-      initialization: { ...metric([initialization.duration], []), heapBeforeBytes, heapAfterBytes },
+      initialization: { ...metric([initialization.duration], []), ...memory },
       coldParse,
       warmParse,
       astSummary,
