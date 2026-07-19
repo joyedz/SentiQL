@@ -358,14 +358,6 @@ export function evaluatePolicy(sql, { mode = 'read-only' } = {}) {
     return deny('SQL does not contain a recognized executable command.');
   }
 
-  if (
-    firstTopLevelToken.value === 'SELECT' &&
-    tokens[1]?.value === 'FROM' &&
-    !/\S/.test(stripped.slice(firstTopLevelToken.end, tokens[1].start))
-  ) {
-    return deny('SQL appears malformed because SELECT has no target expression.');
-  }
-
   if (hasMultipleStatements(masked)) {
     return deny('Multiple SQL statements are not permitted.');
   }

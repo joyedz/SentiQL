@@ -25,7 +25,7 @@ test('malformed fixture separates parser errors from heuristic policy rejections
   assert.equal(result.metrics.heuristicPolicy.malformed.rejections, 2);
   assert.equal(result.metrics.heuristicPolicy.malformed.errors, 0);
   assert.deepEqual(result.metrics.heuristicPolicy.malformed.rejectionReasons, {
-    'SQL appears malformed because SELECT has no target expression.': 2,
+    'SQL contains unbalanced parentheses.': 2,
   });
   assert.equal(
     Object.values(result.metrics.heuristicPolicy.malformed.rejectionReasons)

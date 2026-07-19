@@ -8,5 +8,5 @@ export const fixtures = [
   { name: 'context-mutation', category: 'unsafe-function', sql: "SELECT set_config('app.tenant_id', $1, true)" },
   { name: 'stacked-statements', category: 'multi-statement', sql: 'SELECT 1; SELECT 2' },
   { name: 'dollar-quoted-literal', category: 'literal-stress', sql: 'SELECT $$DROP TABLE users;$$ AS message' },
-  { name: 'malformed', category: 'malformed', sql: 'SELECT FROM' },
+  { name: 'malformed', category: 'malformed', sql: 'SELECT (' },
 ];

@@ -6,7 +6,7 @@ Decision: **No-go for production migration in this experiment; keep the current 
 
 ## Executive result
 
-`@pgsql/parser` 1.5.0 successfully parsed all nine valid fixed fixtures on PostgreSQL parser versions 13, 14, 15, 16, 17, and 18. It also rejected the malformed fixture on every version with `syntax error at end of input`. The normalized AST shape was identical across the six versions for the tested statements. Typed/generated SQL compatibility was not directly validated by this benchmark and remains follow-up work.
+`@pgsql/parser` 1.5.0 successfully parsed all nine valid fixed fixtures on PostgreSQL parser versions 13, 14, 15, 16, 17, and 18. It also rejected the malformed `SELECT (` fixture on every version with a controlled syntax error. The normalized AST shape was identical across the six versions for the tested statements. Typed/generated SQL compatibility was not directly validated by this benchmark and remains follow-up work.
 
 Those are useful compatibility results, but they do not establish production readiness. The benchmark used only ten small fixtures, the AST summary is not an authorization policy, and this run did not verify Node 22 or Docker. The parser also adds about 6.9 MB and 92 installed files, with a large native/WASM-backed external-memory increase during initialization. The current heuristic policy remains the production enforcement boundary.
 
@@ -75,7 +75,7 @@ The command's stdout was valid JSON, and the malformed-fixture checks passed: pa
 
 ## Fixed fixtures and correctness
 
-The identical ten-fixture workload was used for every parser version: small select, medium join, CTE/window query, bounded update, writable CTE, `DROP TABLE`, `set_config`, stacked selects, dollar-quoted literal, and malformed `SELECT FROM`. Fixture sizes ranged from 11 to 193 UTF-8 bytes.
+The identical ten-fixture workload was used for every parser version: small select, medium join, CTE/window query, bounded update, writable CTE, `DROP TABLE`, `set_config`, stacked selects, dollar-quoted literal, and malformed `SELECT (`. Fixture sizes ranged from 8 to 193 UTF-8 bytes.
 
 Across every parser version:
 
@@ -83,7 +83,7 @@ Across every parser version:
 |---|---:|
 | Valid fixtures parsed | 9 / 9 |
 | Malformed fixture parse errors | 5000 / 5000 warm samples |
-| Malformed parser error | `syntax error at end of input` |
+| Malformed parser error | controlled syntax error for unbalanced `(` |
 | AST shape differences in this fixture set | none observed |
 | Parser rejections | 0 for valid fixtures; parse errors are counted separately |
 
@@ -188,14 +188,14 @@ The existing `evaluatePolicy` was measured separately from parser work. On every
 | `DROP TABLE` | deny: destructive statement |
 | `set_config` | deny: context-mutating function |
 | Stacked statements | deny: multiple statements |
-| Malformed SQL | deny: malformed `SELECT` |
+| Malformed SQL | deny: unbalanced parentheses (existing heuristic rule) |
 | Dollar-quoted literal | allow; destructive-looking text remains literal content |
 
 The AST parser provides structure that could support these checks, especially statement count, nested writes, utility nodes, and function calls. It does not by itself provide the current policy's semantic guarantees for WHERE safety, literal/comment handling policy, function allowlists, or fail-closed authorization boundaries. A production migration would require a separate AST policy design and differential/adversarial corpus, not just swapping the parser.
 
 ## Errors, rejections, and version compatibility
 
-The benchmark distinguishes parser errors from policy rejections. For the malformed fixture, all six versions produced 5000 parser errors and zero parser rejections; the heuristic produced zero thrown errors and 5000 policy rejections with reason `SQL appears malformed because SELECT has no target expression.` For each of writable CTE, `DROP TABLE`, `set_config`, and stacked statements, heuristic policy rejection counts were 5000 per version. Valid parser fixtures had zero parser errors and zero parser rejections.
+The benchmark distinguishes parser errors from policy rejections. For the malformed `SELECT (` fixture, all six versions produced 5000 parser errors and zero parser rejections; the unchanged heuristic produced zero thrown errors and 5000 policy rejections with reason `SQL contains unbalanced parentheses.` For each of writable CTE, `DROP TABLE`, `set_config`, and stacked statements, heuristic policy rejection counts were 5000 per version. Valid parser fixtures had zero parser errors and zero parser rejections.
 
 Unsupported parser selection remains fail-closed through the adapter's explicit unsupported-version error. The supported-version list exposed by the pinned package is exactly `[13, 14, 15, 16, 17, 18]`.
 

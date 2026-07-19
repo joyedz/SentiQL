@@ -190,7 +190,7 @@ test('rejects an unsupported parser version before parsing', () => {
 
 test('rejects malformed SQL with a controlled parser error', async () => {
   const parser = createAstParser(16);
-  await assert.rejects(() => parser.parse('SELECT FROM'), /syntax error/i);
+  await assert.rejects(() => parser.parse('SELECT ('), /syntax error/i);
 });
 
 test('reports stacked statements as two AST statements', async () => {
@@ -310,7 +310,7 @@ export const fixtures = [
   { name: 'context-mutation', category: 'unsafe-function', sql: "SELECT set_config('app.tenant_id', $1, true)" },
   { name: 'stacked-statements', category: 'multi-statement', sql: 'SELECT 1; SELECT 2' },
   { name: 'dollar-quoted-literal', category: 'literal-stress', sql: 'SELECT $$DROP TABLE users;$$ AS message' },
-  { name: 'malformed', category: 'malformed', sql: 'SELECT FROM' },
+  { name: 'malformed', category: 'malformed', sql: 'SELECT (' },
 ];
 ```
 
@@ -402,7 +402,7 @@ Run:
 npm test
 ```
 
-Expected: all existing tests plus parser experiment tests pass, with production behavior unchanged.
+Expected: all existing tests plus parser experiment tests pass, with the production heuristic policy unchanged; the malformed fixture must be rejected by its existing unbalanced-parentheses rule, not by a new policy branch.
 
 - [ ] **Step 4: Write the findings document**
 
