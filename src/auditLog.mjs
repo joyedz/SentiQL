@@ -3,6 +3,18 @@ import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
 const MAX_RECENT_ENTRIES = 500;
+const SHADOW_SOURCES = new Set(['raw_query_compatibility', 'typed_capability']);
+const SHADOW_MODES = new Set(['read-only', 'read-write']);
+const SHADOW_DECISIONS = new Set(['allow', 'deny']);
+const SHADOW_PARSE_STATUSES = new Set(['parsed', 'parse_error', 'unsupported_version']);
+const SHADOW_CLASSIFICATIONS = new Set([
+  'match',
+  'ast_deny_heuristic_allow',
+  'ast_allow_heuristic_deny',
+  'decision_match_reason_diff',
+  'parse_error',
+  'unsupported',
+]);
 
 function normalizeLimit(limit) {
   const numericLimit = Number(limit);
@@ -32,8 +44,27 @@ const V2_SCHEMA = `
   session_id TEXT
 `;
 
+const AST_POLICY_SHADOW_SCHEMA = `
+  timestamp TEXT NOT NULL,
+  correlation_id TEXT,
+  source TEXT NOT NULL CHECK(source IN ('raw_query_compatibility', 'typed_capability')),
+  mode TEXT NOT NULL CHECK(mode IN ('read-only', 'read-write')),
+  parser_version INTEGER NOT NULL,
+  sql_digest TEXT NOT NULL,
+  heuristic_decision TEXT NOT NULL CHECK(heuristic_decision IN ('allow', 'deny')),
+  ast_decision TEXT NOT NULL CHECK(ast_decision IN ('allow', 'deny')),
+  ast_reason_code TEXT NOT NULL,
+  ast_parse_status TEXT NOT NULL CHECK(ast_parse_status IN ('parsed', 'parse_error', 'unsupported_version')),
+  classification TEXT NOT NULL,
+  facts_json TEXT NOT NULL
+`;
+
 function createV2Table(database) {
   database.exec(`CREATE TABLE audit_entries (${V2_SCHEMA})`);
+}
+
+function createAstPolicyShadowTable(database) {
+  database.exec(`CREATE TABLE IF NOT EXISTS ast_policy_shadow_entries (${AST_POLICY_SHADOW_SCHEMA})`);
 }
 
 function migrateLegacyTable(database) {
@@ -81,6 +112,79 @@ function parseRequest(requestJson) {
   }
 }
 
+function compactShadowFacts(facts = {}) {
+  const whereClauseSafety = ['absent', 'trivial', 'non_trivial', 'unknown'].includes(facts.whereClauseSafety)
+    ? facts.whereClauseSafety
+    : 'unknown';
+  return {
+    statementCount: Number.isInteger(facts.statementCount) && facts.statementCount >= 0
+      ? facts.statementCount
+      : 0,
+    topLevelKinds: Array.isArray(facts.topLevelKinds)
+      ? facts.topLevelKinds.filter((kind) => typeof kind === 'string' && /^[A-Za-z][A-Za-z0-9_]*$/.test(kind))
+      : [],
+    nestedWriteCount: Number.isInteger(facts.nestedWriteCount) && facts.nestedWriteCount >= 0
+      ? facts.nestedWriteCount
+      : 0,
+    hasSelectInto: facts.hasSelectInto === true,
+    hasUtilityStatement: facts.hasUtilityStatement === true,
+    hasContextMutation: facts.hasContextMutation === true,
+    whereClauseSafety,
+    hasTrivialWhere: facts.hasTrivialWhere === true,
+  };
+}
+
+function parseShadowFacts(factsJson) {
+  try {
+    return compactShadowFacts(JSON.parse(factsJson));
+  } catch {
+    return compactShadowFacts();
+  }
+}
+
+function requireChoice(value, choices, field) {
+  if (!choices.has(value)) throw new Error(`Invalid AST policy shadow ${field}.`);
+  return value;
+}
+
+function normalizeShadowEvent({
+  timestamp = new Date().toISOString(),
+  correlationId = null,
+  source,
+  mode,
+  parserVersion,
+  sqlDigest,
+  heuristicDecision,
+  astDecision,
+  astReasonCode,
+  astParseStatus,
+  classification,
+  facts,
+} = {}) {
+  if (typeof timestamp !== 'string') throw new Error('Invalid AST policy shadow timestamp.');
+  if (correlationId !== null && typeof correlationId !== 'string') throw new Error('Invalid AST policy shadow correlation ID.');
+  if (!Number.isInteger(parserVersion)) throw new Error('Invalid AST policy shadow parser version.');
+  if (typeof sqlDigest !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(sqlDigest)) {
+    throw new Error('Invalid AST policy shadow SQL digest.');
+  }
+  if (typeof astReasonCode !== 'string') throw new Error('Invalid AST policy shadow AST reason code.');
+
+  return {
+    timestamp,
+    correlationId,
+    source: requireChoice(source, SHADOW_SOURCES, 'source'),
+    mode: requireChoice(mode, SHADOW_MODES, 'mode'),
+    parserVersion,
+    sqlDigest,
+    heuristicDecision: requireChoice(heuristicDecision, SHADOW_DECISIONS, 'heuristic decision'),
+    astDecision: requireChoice(astDecision, SHADOW_DECISIONS, 'AST decision'),
+    astReasonCode,
+    astParseStatus: requireChoice(astParseStatus, SHADOW_PARSE_STATUSES, 'AST parse status'),
+    classification: requireChoice(classification, SHADOW_CLASSIFICATIONS, 'classification'),
+    facts: compactShadowFacts(facts),
+  };
+}
+
 /**
  * Creates the local append-only audit store used by the MCP server and dashboard.
  */
@@ -89,6 +193,7 @@ export function createAuditLog(filePath) {
   const database = new DatabaseSync(filePath);
   try {
     ensureV2Schema(database);
+    createAstPolicyShadowTable(database);
   } catch (error) {
     database.close();
     throw error;
@@ -107,6 +212,21 @@ export function createAuditLog(filePath) {
       database_outcome, row_count, session_id
     FROM audit_entries
     ORDER BY timestamp DESC, id DESC
+    LIMIT ?
+  `);
+  const insertAstPolicyShadow = database.prepare(`
+    INSERT INTO ast_policy_shadow_entries (
+      timestamp, correlation_id, source, mode, parser_version, sql_digest,
+      heuristic_decision, ast_decision, ast_reason_code, ast_parse_status,
+      classification, facts_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  const selectRecentAstPolicyShadows = database.prepare(`
+    SELECT timestamp, correlation_id, source, mode, parser_version, sql_digest,
+      heuristic_decision, ast_decision, ast_reason_code, ast_parse_status,
+      classification, facts_json
+    FROM ast_policy_shadow_entries
+    ORDER BY timestamp DESC, rowid DESC
     LIMIT ?
   `);
 
@@ -169,6 +289,41 @@ export function createAuditLog(filePath) {
         databaseOutcome: entry.database_outcome ?? null,
         rowCount: entry.row_count ?? null,
         sessionId: entry.session_id ?? null,
+      }));
+    },
+
+    recordAstPolicyShadow(event) {
+      const normalized = normalizeShadowEvent(event);
+      insertAstPolicyShadow.run(
+        normalized.timestamp,
+        normalized.correlationId,
+        normalized.source,
+        normalized.mode,
+        normalized.parserVersion,
+        normalized.sqlDigest,
+        normalized.heuristicDecision,
+        normalized.astDecision,
+        normalized.astReasonCode,
+        normalized.astParseStatus,
+        normalized.classification,
+        JSON.stringify(normalized.facts),
+      );
+    },
+
+    listRecentAstPolicyShadows(limit = 100) {
+      return selectRecentAstPolicyShadows.all(normalizeLimit(limit)).map((entry) => ({
+        timestamp: entry.timestamp,
+        correlationId: entry.correlation_id ?? null,
+        source: entry.source,
+        mode: entry.mode,
+        parserVersion: entry.parser_version,
+        sqlDigest: entry.sql_digest,
+        heuristicDecision: entry.heuristic_decision,
+        astDecision: entry.ast_decision,
+        astReasonCode: entry.ast_reason_code,
+        astParseStatus: entry.ast_parse_status,
+        classification: entry.classification,
+        facts: parseShadowFacts(entry.facts_json),
       }));
     },
 

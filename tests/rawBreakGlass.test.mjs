@@ -140,3 +140,48 @@ test('raw compatibility denies attempts to mutate the RLS context', async () => 
   assert.equal(result.isError, true);
   assert.match(result.content[0].text, /DENIED/i);
 });
+
+
+test('raw compatibility remains authoritative while its shadow receives allow and deny contexts', async () => {
+  const observations = [];
+  const shadow = { observe: (context) => observations.push(context) };
+  let executed = false;
+  const allowed = await processRawCompatibilityRequest({ sql: 'SELECT 1' }, {
+    createCorrelationId: () => 'raw-shadow-correlation',
+    getToken: async () => 'signed-token',
+    verifyIdentity: async () => principal,
+    execute: async () => { executed = true; return { rows: [], command: 'SELECT', rowCount: 0 }; },
+    audit: { record: () => {} },
+    breakGlassReason: 'incident-shadow',
+    astPolicyShadow: shadow,
+  });
+  assert.equal(allowed.isError, undefined);
+  assert.equal(executed, true);
+  assert.deepEqual(observations[0], {
+    sql: 'SELECT 1',
+    mode: 'read-only',
+    heuristicDecision: 'allow',
+    correlationId: 'raw-shadow-correlation',
+    source: 'raw_query_compatibility',
+  });
+
+  executed = false;
+  const denied = await processRawCompatibilityRequest({ sql: 'DROP TABLE users' }, {
+    createCorrelationId: () => 'raw-shadow-deny',
+    getToken: async () => 'signed-token',
+    verifyIdentity: async () => principal,
+    execute: async () => { executed = true; },
+    audit: { record: () => {} },
+    breakGlassReason: 'incident-shadow',
+    astPolicyShadow: shadow,
+  });
+  assert.equal(denied.isError, true);
+  assert.equal(executed, false);
+  assert.deepEqual(observations[1], {
+    sql: 'DROP TABLE users',
+    mode: 'read-only',
+    heuristicDecision: 'deny',
+    correlationId: 'raw-shadow-deny',
+    source: 'raw_query_compatibility',
+  });
+});

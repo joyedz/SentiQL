@@ -19,6 +19,19 @@ function errorMessage(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
+// A shadow observer is deliberately fire-and-forget: its work and failures
+// cannot delay, change, or expose results from the authoritative policy path.
+function scheduleAstPolicyShadow(astPolicyShadow, context, logError = (message) => console.error(message)) {
+  if (!astPolicyShadow || typeof astPolicyShadow.observe !== 'function') return;
+  try {
+    Promise.resolve(astPolicyShadow.observe(context)).catch(() => {
+      try { logError('AST policy shadow observation failed.'); } catch { /* observer errors stay isolated */ }
+    });
+  } catch {
+    try { logError('AST policy shadow observation failed.'); } catch { /* observer errors stay isolated */ }
+  }
+}
+
 function auditSqlDigest(sql) {
   return typeof sql === 'string' ? `sha256:${createHash('sha256').update(sql, 'utf8').digest('hex')}` : null;
 }
@@ -40,11 +53,26 @@ export function resolveAuditPath(auditPath) {
  */
 export async function processQuery(
   input,
-  { mode = 'read-only', audit, execute, logError = (message) => console.error(message) },
+  {
+    mode = 'read-only',
+    audit,
+    execute,
+    correlationId = null,
+    astPolicyShadow = null,
+    shadowSource = 'raw_query_compatibility',
+    logError = (message) => console.error(message),
+  },
 ) {
   const { sql } = input;
   const sessionId = clientSessionId(input);
   const policy = evaluatePolicy(sql, { mode });
+  scheduleAstPolicyShadow(astPolicyShadow, {
+    sql,
+    mode,
+    heuristicDecision: policy.decision,
+    correlationId,
+    source: shadowSource,
+  }, logError);
 
   if (policy.decision === 'deny') {
     try {
@@ -168,6 +196,9 @@ export async function processRawCompatibilityRequest(input, dependencies = {}) {
     mode: dependencies.mode ?? 'read-only',
     audit: rawAudit,
     execute,
+    correlationId,
+    astPolicyShadow: dependencies.astPolicyShadow ?? null,
+    shadowSource: 'raw_query_compatibility',
     logError: dependencies.logError ?? ((message) => console.error(message)),
   });
 }
@@ -338,9 +369,17 @@ export async function processCapabilityRequest(input, dependencies = {}) {
       resource: policy?.resources?.[requestInput.resource],
       constraints: decision.constraints,
     });
+    const lexicalMode = input.capability === 'data.mutate' ? 'read-write' : 'read-only';
     const lexical = (dependencies.evaluate ?? dependencies.evaluatePolicy ?? evaluatePolicy)(compiled.text, {
-      mode: input.capability === 'data.mutate' ? 'read-write' : 'read-only',
+      mode: lexicalMode,
     });
+    scheduleAstPolicyShadow(dependencies.astPolicyShadow, {
+      sql: compiled.text,
+      mode: lexicalMode,
+      heuristicDecision: lexical?.decision,
+      correlationId,
+      source: 'typed_capability',
+    }, dependencies.logError ?? ((message) => console.error(message)));
     if (!lexical || lexical.decision !== 'allow') {
       const reason = lexical?.reason ?? 'Generated SQL failed policy safety checks.';
       try { await auditDecision('deny', reason, { sql: compiled.text }); } catch { /* fail closed */ }
@@ -404,9 +443,35 @@ export async function startServer(overrides = {}) {
   const policy = overrides.policy ?? await loadBundle(resolve(projectRoot, bundlePath ?? './config/policy.json'));
   const verifyIdentity = overrides.verifyIdentity ?? createIdentityVerifier(policy.identity);
   const rawEnabled = String(process.env.ENABLE_RAW_QUERY_COMPATIBILITY ?? '').toLowerCase() === 'true';
+  const shadowEnabled = overrides.enableAstPolicyShadow
+    ?? String(process.env.ENABLE_AST_POLICY_SHADOW ?? 'false').toLowerCase() === 'true';
+  let shadowParserVersion = 16;
+  if (shadowEnabled) {
+    const configuredParserVersion = overrides.astPolicyShadowParserVersion
+      ?? process.env.AST_POLICY_SHADOW_PARSER_VERSION
+      ?? '16';
+    shadowParserVersion = Number(configuredParserVersion);
+    if (!Number.isInteger(shadowParserVersion)) {
+      throw new Error('AST_POLICY_SHADOW_PARSER_VERSION must be an integer when ENABLE_AST_POLICY_SHADOW=true.');
+    }
+  }
   const breakGlassReason = rawEnabled ? process.env.RAW_QUERY_BREAK_GLASS_REASON?.trim() : null;
   if (rawEnabled && !breakGlassReason) throw new Error('RAW_QUERY_BREAK_GLASS_REASON is required when raw query compatibility is enabled.');
   const audit = overrides.audit ?? createAuditLog(resolveAuditPath(process.env.AUDIT_DB_PATH ?? './data/audit.sqlite'));
+  let astPolicyShadow = null;
+  if (shadowEnabled) {
+    if (overrides.astPolicyShadow) {
+      astPolicyShadow = overrides.astPolicyShadow;
+    } else {
+      const { createAstPolicyShadow } = await import('./astPolicyShadow.mjs');
+      astPolicyShadow = createAstPolicyShadow({
+        enabled: true,
+        parserVersion: shadowParserVersion,
+        record: (event) => audit.recordAstPolicyShadow(event),
+        logError: overrides.logError ?? ((message) => console.error(`[sentiql] ${message}`)),
+      });
+    }
+  }
   // Typed capabilities use the configured policy mode.  Keep read-only as the
   // safe default; executeCompiled still enforces transaction read-only for
   // semantic reads/aggregates while allowing mutations only in read-write mode.
@@ -416,7 +481,7 @@ export async function startServer(overrides = {}) {
   });
   const getToken = overrides.getToken ?? (() => readWorkloadToken(process.env.OIDC_TOKEN_FILE));
   const server = new McpServer({ name: 'sentiql', version: '1.0.0' });
-  const capabilityDeps = { policy, audit, database, verifyIdentity, getToken };
+  const capabilityDeps = { policy, audit, database, verifyIdentity, getToken, astPolicyShadow };
   let rawDatabase = null;
 
   server.registerTool('schema_discover', {
@@ -451,6 +516,7 @@ export async function startServer(overrides = {}) {
       getToken,
       verifyIdentity,
       execute: rawDatabase.executeAllowedQueryWithContext,
+      astPolicyShadow,
       logError: (message) => console.error(`[sentiql] ${message}`),
     }));
     console.error('[sentiql] WARNING: raw query compatibility mode enabled');
@@ -466,7 +532,7 @@ export async function startServer(overrides = {}) {
     throw error;
   }
   console.error('[sentiql] MCP server running');
-  return { server, audit, database, policy };
+  return { server, audit, database, policy, astPolicyShadow };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

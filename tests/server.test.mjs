@@ -354,3 +354,97 @@ test('returns a controlled database error when execution-error audit persistence
   assert.match(logged[0], /database execution failed.*secret_table/i);
   assert.match(logged[1], /audit log.*error.*disk full/i);
 });
+
+
+test('typed capability lexical decisions remain authoritative while the shadow sees compiled SQL', async () => {
+  const observations = [];
+  let executed = false;
+  const shadow = { observe: (context) => observations.push(context) };
+  const allowResult = await processCapabilityRequest(
+    { capability: 'data.read', resource: 'cases', purpose: 'support', fields: ['id'] },
+    capabilityDeps({
+      authorize: () => ({ decision: 'allow', reason: 'Allowed.', constraints: { fields: ['id'], selectorFields: [], maxRows: 1 } }),
+      compile: () => ({ text: 'SELECT id FROM cases WHERE id = 1', values: [], command: 'read' }),
+      execute: async () => { executed = true; return { rows: [], command: 'SELECT', rowCount: 0 }; },
+      astPolicyShadow: shadow,
+    }),
+  );
+  assert.equal(allowResult.isError, undefined);
+  assert.equal(executed, true);
+  assert.deepEqual(observations[0], {
+    sql: 'SELECT id FROM cases WHERE id = 1',
+    mode: 'read-only',
+    heuristicDecision: 'allow',
+    correlationId: 'corr-1',
+    source: 'typed_capability',
+  });
+
+  executed = false;
+  const denyResult = await processCapabilityRequest(
+    { capability: 'data.read', resource: 'cases', purpose: 'support', fields: ['id'] },
+    capabilityDeps({
+      authorize: () => ({ decision: 'allow', reason: 'Allowed.', constraints: { fields: ['id'], selectorFields: [], maxRows: 1 } }),
+      compile: () => ({ text: 'SELECT id FROM cases WHERE id = 1', values: [], command: 'read' }),
+      evaluate: () => ({ decision: 'deny', reason: 'Generated SQL denied.' }),
+      execute: async () => { executed = true; },
+      astPolicyShadow: shadow,
+    }),
+  );
+  assert.equal(denyResult.isError, true);
+  assert.equal(executed, false);
+  assert.deepEqual(observations[1], {
+    sql: 'SELECT id FROM cases WHERE id = 1',
+    mode: 'read-only',
+    heuristicDecision: 'deny',
+    correlationId: 'corr-1',
+    source: 'typed_capability',
+  });
+});
+
+test('a rejected shadow observer cannot change an allowed query response or execution', async () => {
+  let executed = false;
+  const result = await processQuery(
+    { sql: 'SELECT 1' },
+    {
+      audit: { record: () => {} },
+      execute: async () => { executed = true; return { rows: [], command: 'SELECT', rowCount: 0 }; },
+      astPolicyShadow: { observe: () => Promise.reject(new Error('shadow unavailable')) },
+      correlationId: 'corr-shadow-error',
+      logError: () => {},
+    },
+  );
+
+  assert.equal(executed, true);
+  assert.equal(result.isError, undefined);
+});
+
+test('startServer wires an injected shadow only when the feature flag is enabled', async () => {
+  const previousShadow = process.env.ENABLE_AST_POLICY_SHADOW;
+  const previousPostgres = process.env.POSTGRES_URL;
+  const shadow = { observe: () => {} };
+  const audit = { record: () => {}, recordAstPolicyShadow: () => {}, close: () => {} };
+  const overrides = {
+    policy,
+    database: { executeCompiled: async () => ({ rows: [], rowCount: 0 }), close: async () => {} },
+    audit,
+    astPolicyShadow: shadow,
+    verifyIdentity: async () => principal,
+    getToken: async () => 'token',
+    transport: { async start() {}, async send() {}, async close() {} },
+  };
+  try {
+    process.env.POSTGRES_URL = 'postgresql://example';
+    process.env.ENABLE_AST_POLICY_SHADOW = 'false';
+    const disabled = await startServer(overrides);
+    assert.equal(disabled.astPolicyShadow, null);
+
+    process.env.ENABLE_AST_POLICY_SHADOW = 'true';
+    const enabled = await startServer(overrides);
+    assert.equal(enabled.astPolicyShadow, shadow);
+  } finally {
+    if (previousShadow === undefined) delete process.env.ENABLE_AST_POLICY_SHADOW;
+    else process.env.ENABLE_AST_POLICY_SHADOW = previousShadow;
+    if (previousPostgres === undefined) delete process.env.POSTGRES_URL;
+    else process.env.POSTGRES_URL = previousPostgres;
+  }
+});

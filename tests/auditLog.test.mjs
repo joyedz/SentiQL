@@ -200,3 +200,57 @@ test('v2 startup is idempotent and retains data', async (t) => {
   assert.deepEqual(second.listRecent(), before);
   second.close();
 });
+
+
+test('persists only normalized AST shadow metadata across idempotent reopen without affecting audit entries', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'sentiql-audit-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const filePath = join(directory, 'audit.sqlite');
+  const audit = createAuditLog(filePath);
+  audit.record({ sql: 'SELECT existing_entry', decision: 'allow', reason: 'existing' });
+
+  const expected = {
+    timestamp: '2026-07-20T00:00:00.000Z',
+    correlationId: 'opaque-correlation',
+    source: 'typed_capability',
+    mode: 'read-only',
+    parserVersion: 16,
+    sqlDigest: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    heuristicDecision: 'allow',
+    astDecision: 'deny',
+    astReasonCode: 'unknown_where',
+    astParseStatus: 'parsed',
+    classification: 'ast_deny_heuristic_allow',
+    facts: {
+      statementCount: 1,
+      topLevelKinds: ['SelectStmt'],
+      nestedWriteCount: 0,
+      hasSelectInto: false,
+      hasUtilityStatement: false,
+      hasContextMutation: false,
+      whereClauseSafety: 'unknown',
+      hasTrivialWhere: false,
+    },
+  };
+  audit.recordAstPolicyShadow({
+    ...expected,
+    sql: "SELECT private_value FROM private_table WHERE id = 'secret-value'",
+    subject: 'subject-1',
+    organization: 'org-1',
+    tenantId: 'tenant-1',
+    roles: ['admin'],
+    sessionId: 'session-1',
+    request: { value: 'secret-value' },
+  });
+  assert.equal(audit.listRecent().length, 1);
+  audit.close();
+
+  const reopened = createAuditLog(filePath);
+  assert.deepEqual(reopened.listRecentAstPolicyShadows(), [expected]);
+  assert.equal(reopened.listRecent().length, 1);
+  const serialized = JSON.stringify(reopened.listRecentAstPolicyShadows()[0]);
+  for (const forbidden of ['private_value', 'private_table', 'secret-value', 'subject-1', 'org-1', 'tenant-1', 'admin', 'session-1']) {
+    assert.equal(serialized.includes(forbidden), false, forbidden);
+  }
+  reopened.close();
+});
