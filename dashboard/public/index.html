@@ -8,17 +8,28 @@
       :root { color-scheme: dark; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
       * { box-sizing: border-box; }
       body { margin: 0; background: #090c10; color: #d7e0e8; }
-      header { position: sticky; top: 0; display: flex; justify-content: space-between; gap: 1rem; padding: 1rem 1.25rem; background: #10161d; border-bottom: 1px solid #2b3946; }
+      header { position: sticky; top: 0; z-index: 1; display: flex; justify-content: space-between; gap: 1rem; padding: 1rem 1.25rem; background: #10161d; border-bottom: 1px solid #2b3946; }
       h1 { margin: 0; font-size: 1rem; letter-spacing: .06em; color: #e7f4ff; }
-      #status { color: #88a2b8; font-size: .8rem; }
+      h2 { margin: 0 0 1rem; font-size: 1rem; color: #e7f4ff; }
+      h3 { margin: 1.25rem 0 .5rem; font-size: .8rem; color: #9fb8ca; letter-spacing: .05em; text-transform: uppercase; }
+      #status, .feed-status { color: #88a2b8; font-size: .8rem; }
       main { max-width: 1200px; margin: 0 auto; padding: 1.25rem; }
+      section { margin-bottom: 2rem; padding: 1rem; border: 1px solid #263542; background: #0d1319; }
       .entry { display: grid; grid-template-columns: 12rem 5.75rem minmax(12rem, 2fr) minmax(12rem, 1.5fr) minmax(8rem, 1fr); gap: .75rem; align-items: start; padding: .9rem 0; border-bottom: 1px solid #1b2834; font-size: .85rem; }
       .entry-label { display: none; color: #88a2b8; }
-      .badge { display: inline-block; width: fit-content; padding: .2rem .45rem; border: 1px solid currentColor; border-radius: 2px; font-size: .75rem; font-weight: 700; text-transform: uppercase; }
-      .allow { color: #79d69c; } .deny { color: #ffae72; } .approval_required { color: #f1d36b; } .error { color: #ff7d8a; }
+      .badge, .signal { display: inline-block; width: fit-content; padding: .2rem .45rem; border: 1px solid currentColor; border-radius: 2px; font-size: .75rem; font-weight: 700; text-transform: uppercase; }
+      .allow, .ok { color: #79d69c; } .deny, .warning { color: #ffae72; } .approval_required { color: #f1d36b; } .error, .danger { color: #ff7d8a; }
       .value { white-space: pre-wrap; overflow-wrap: anywhere; }
-      .empty { color: #88a2b8; padding: 2rem 0; }
-      @media (max-width: 760px) { .entry { grid-template-columns: 1fr; gap: .25rem; } .entry-label { display: inline; margin-right: .5rem; } }
+      .empty { color: #88a2b8; padding: 1rem 0; }
+      .cards, .breakdowns { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: .75rem; }
+      .card, .breakdown { padding: .75rem; border: 1px solid #263542; background: #101820; }
+      .card-label { color: #88a2b8; font-size: .72rem; text-transform: uppercase; }
+      .card-value { display: block; margin-top: .35rem; font-size: 1.25rem; }
+      .breakdown-title { color: #9fb8ca; font-size: .75rem; text-transform: uppercase; }
+      .count-row { display: flex; justify-content: space-between; gap: 1rem; padding-top: .45rem; font-size: .78rem; }
+      .shadow-event { display: grid; grid-template-columns: 11rem 15rem 8rem 8rem minmax(16rem, 1fr); gap: .65rem; padding: .7rem 0; border-bottom: 1px solid #1b2834; font-size: .78rem; }
+      .digest { color: #9fb8ca; overflow-wrap: anywhere; }
+      @media (max-width: 760px) { .entry, .shadow-event { grid-template-columns: 1fr; gap: .25rem; } .entry-label { display: inline; margin-right: .5rem; } }
     </style>
   </head>
   <body>
@@ -26,28 +37,40 @@
       <h1>SENTIQL / AUDIT CONSOLE</h1>
       <div id="status">connecting…</div>
     </header>
-    <main id="entries" aria-live="polite"></main>
+    <main>
+      <section aria-labelledby="shadow-title">
+        <h2 id="shadow-title">AST SHADOW REVIEW</h2>
+        <div id="shadow-status" class="feed-status">connecting…</div>
+        <div id="shadow-summary" class="cards" aria-live="polite"></div>
+        <div id="shadow-breakdowns" class="breakdowns"></div>
+        <h3>Recent normalized observations</h3>
+        <div id="shadow-events" aria-live="polite"></div>
+      </section>
+      <section aria-labelledby="audit-title">
+        <h2 id="audit-title">AUDIT ENTRIES</h2>
+        <div id="entries" aria-live="polite"></div>
+      </section>
+    </main>
     <script>
       const container = document.getElementById('entries');
       const status = document.getElementById('status');
-      // Keep the console semantic and safe by rendering only structured,
-      // redacted audit fields. Sensitive query payloads, tokens, and database
-      // connection details are intentionally never inserted into the DOM.
+      const shadowSummary = document.getElementById('shadow-summary');
+      const shadowBreakdowns = document.getElementById('shadow-breakdowns');
+      const shadowEvents = document.getElementById('shadow-events');
+      const shadowStatus = document.getElementById('shadow-status');
+
       const fields = [
-        ['timestamp', 'TIME'],
-        ['correlationId', 'CORRELATION'],
-        ['subject', 'SUBJECT'],
-        ['organization', 'ORGANIZATION'],
-        ['capability', 'CAPABILITY'],
-        ['purpose', 'PURPOSE'],
-        ['resource', 'RESOURCE'],
-        ['request', 'REQUEST'],
-        ['policyVersion', 'POLICY VERSION'],
-        ['policyHash', 'POLICY HASH'],
-        ['decision', 'DECISION'],
-        ['reason', 'REASON'],
-        ['databaseOutcome', 'DATABASE OUTCOME'],
-        ['rowCount', 'ROW COUNT'],
+        ['timestamp', 'TIME'], ['correlationId', 'CORRELATION'], ['subject', 'SUBJECT'],
+        ['organization', 'ORGANIZATION'], ['capability', 'CAPABILITY'], ['purpose', 'PURPOSE'],
+        ['resource', 'RESOURCE'], ['request', 'REQUEST'], ['policyVersion', 'POLICY VERSION'],
+        ['policyHash', 'POLICY HASH'], ['decision', 'DECISION'], ['reason', 'REASON'],
+        ['databaseOutcome', 'DATABASE OUTCOME'], ['rowCount', 'ROW COUNT'],
+      ];
+      const shadowCountGroups = [
+        ['classificationCounts', 'CLASSIFICATION'],
+        ['parseStatusCounts', 'PARSE STATUS'],
+        ['observedParserVersionCounts', 'PARSER VERSION'],
+        ['observedReasonCodeCounts', 'AST REASON CODE'],
       ];
 
       function element(tag, className, value) {
@@ -61,18 +84,13 @@
         if (!request || typeof request !== 'object') return '—';
         const allowed = ['capability', 'resource', 'purpose', 'fields', 'selector', 'limit', 'metric', 'groupBy', 'action'];
         const summary = {};
-        for (const key of allowed) {
-          if (Object.hasOwn(request, key)) summary[key] = request[key];
-        }
+        for (const key of allowed) if (Object.hasOwn(request, key)) summary[key] = request[key];
         return Object.keys(summary).length ? JSON.stringify(summary) : '—';
       }
 
       function render(entries) {
         container.replaceChildren();
-        if (!entries.length) {
-          container.append(element('p', 'empty', 'No audit entries recorded.'));
-          return;
-        }
+        if (!entries.length) { container.append(element('p', 'empty', 'No audit entries recorded.')); return; }
         for (const entry of entries) {
           const row = element('article', 'entry');
           for (const [key, label] of fields) {
@@ -84,8 +102,7 @@
             } else if (key === 'request') {
               cell.append(document.createTextNode(redactedRequestSummary(entry.request)));
             } else {
-              const value = entry[key] == null || entry[key] === '' ? '—' : String(entry[key]);
-              cell.append(document.createTextNode(value));
+              cell.append(document.createTextNode(entry[key] == null || entry[key] === '' ? '—' : String(entry[key])));
             }
             row.append(cell);
           }
@@ -93,20 +110,81 @@
         }
       }
 
-      async function refresh() {
-        try {
-          const response = await fetch('/api/audit', { cache: 'no-store' });
-          if (!response.ok) throw new Error(`HTTP ${response.status}`);
-          const payload = await response.json();
-          render(Array.isArray(payload.entries) ? payload.entries : []);
-          status.textContent = `updated ${new Date().toLocaleTimeString()}`;
-        } catch {
-          status.textContent = 'audit feed unavailable';
+      function renderCard(label, value, className) {
+        const card = element('div', `card ${className || ''}`);
+        card.append(element('span', 'card-label', label));
+        card.append(element('strong', 'card-value', String(value)));
+        return card;
+      }
+
+      function renderCounts(parent, title, counts) {
+        const box = element('div', 'breakdown');
+        box.append(element('div', 'breakdown-title', title));
+        if (!counts || typeof counts !== 'object' || Array.isArray(counts)) return box;
+        for (const [key, value] of Object.entries(counts)) {
+          if (typeof value !== 'number' || !Number.isFinite(value)) continue;
+          const row = element('div', 'count-row');
+          row.append(element('span', '', key));
+          row.append(element('strong', '', String(value)));
+          box.append(row);
+        }
+        parent.append(box);
+      }
+
+      function renderShadow(payload) {
+        shadowSummary.replaceChildren();
+        shadowBreakdowns.replaceChildren();
+        shadowEvents.replaceChildren();
+        const signals = payload && payload.safetySignals && typeof payload.safetySignals === 'object' ? payload.safetySignals : {};
+        const integrity = payload && payload.integrity && typeof payload.integrity === 'object' ? payload.integrity : {};
+        shadowSummary.append(renderCard('records', Number.isFinite(payload?.totalRecords) ? payload.totalRecords : 0));
+        shadowSummary.append(renderCard('widenings', Number.isFinite(signals.ast_allow_heuristic_deny) ? signals.ast_allow_heuristic_deny : 0, signals.ast_allow_heuristic_deny ? 'danger' : 'ok'));
+        shadowSummary.append(renderCard('parse errors', Number.isFinite(signals.parse_errors) ? signals.parse_errors : 0, signals.parse_errors ? 'warning' : 'ok'));
+        shadowSummary.append(renderCard('unsupported parser', Number.isFinite(signals.unsupported_parser_results) ? signals.unsupported_parser_results : 0, signals.unsupported_parser_results ? 'warning' : 'ok'));
+        shadowSummary.append(renderCard('integrity', integrity.status || 'unknown', integrity.status === 'ok' ? 'ok' : 'danger'));
+        for (const [key, label] of shadowCountGroups) renderCounts(shadowBreakdowns, label, payload?.[key]);
+
+        const events = Array.isArray(payload?.recentEvents) ? payload.recentEvents : [];
+        if (!events.length) { shadowEvents.append(element('p', 'empty', 'No shadow observations recorded.')); return; }
+        for (const event of events) {
+          const row = element('article', 'shadow-event');
+          row.append(element('span', '', event && typeof event.timestamp === 'string' ? event.timestamp : '—'));
+          row.append(element('span', '', event && typeof event.classification === 'string' ? event.classification : '—'));
+          row.append(element('span', '', event && typeof event.astParseStatus === 'string' ? event.astParseStatus : '—'));
+          row.append(element('span', '', event && typeof event.astReasonCode === 'string' ? event.astReasonCode : '—'));
+          row.append(element('span', 'digest', event && typeof event.sqlDigest === 'string' ? event.sqlDigest : '—'));
+          shadowEvents.append(row);
         }
       }
 
-      refresh();
-      setInterval(refresh, 2000);
+      async function refreshAudit() {
+        try {
+          const response = await fetch('/api/audit', { cache: 'no-store' });
+          if (!response.ok) throw new Error('audit unavailable');
+          const payload = await response.json();
+          render(Array.isArray(payload.entries) ? payload.entries : []);
+          status.textContent = `updated ${new Date().toLocaleTimeString()}`;
+        } catch { status.textContent = 'audit feed unavailable'; }
+      }
+
+      async function refreshShadow() {
+        try {
+          const response = await fetch('/api/ast-shadow-review', { cache: 'no-store' });
+          if (!response.ok) throw new Error('shadow unavailable');
+          renderShadow(await response.json());
+          shadowStatus.textContent = 'read-only review feed updated';
+        } catch {
+          shadowStatus.textContent = 'shadow review feed unavailable';
+          shadowSummary.replaceChildren(renderCard('review', 'unavailable', 'danger'));
+          shadowBreakdowns.replaceChildren();
+          shadowEvents.replaceChildren();
+        }
+      }
+
+      refreshAudit();
+      refreshShadow();
+      setInterval(refreshAudit, 2000);
+      setInterval(refreshShadow, 5000);
     </script>
   </body>
 </html>

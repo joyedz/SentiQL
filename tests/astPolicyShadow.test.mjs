@@ -83,15 +83,19 @@ test('normalizes a shadow event to digest and compact facts without SQL or ident
     'astParseStatus',
     'astReasonCode',
     'classification',
+    'contractVersion',
     'correlationId',
     'facts',
     'heuristicDecision',
     'mode',
     'parserVersion',
+    'parserVersionValidity',
     'source',
     'sqlDigest',
     'timestamp',
   ]);
+  assert.equal(event.contractVersion, 1);
+  assert.equal(event.parserVersionValidity, 'supported');
   assert.match(event.sqlDigest, /^sha256:[a-f0-9]{64}$/);
   assert.equal(event.sqlDigest.includes('identity-123'), false);
   assert.equal(event.classification, 'match');
@@ -178,4 +182,25 @@ test('evaluation and recording failures are logged safely and never rethrown', a
   });
   assert.deepEqual(recordResult, { status: 'failed' });
   assert.deepEqual(recordLogs, ['AST policy shadow observation failed.']);
+});
+
+test('fails the observation instead of coercing invalid AST facts into plausible metadata', async () => {
+  const events = [];
+  const shadow = createAstPolicyShadow({
+    enabled: true,
+    record: (event) => events.push(event),
+    evaluate: async () => astResult({ facts: { ...SAFE_FACTS, statementCount: 1001 } }),
+    logError: () => {},
+  });
+
+  const result = await shadow.observe({
+    sql: 'SELECT 1',
+    mode: 'read-only',
+    heuristicDecision: 'allow',
+    correlationId: 'corr-invalid-facts',
+    source: 'typed_capability',
+  });
+
+  assert.deepEqual(result, { status: 'failed' });
+  assert.deepEqual(events, []);
 });
