@@ -137,32 +137,78 @@ function denyResult(reasonCode, parserVersion, parseStatus, facts) {
   };
 }
 
-// Conservative, fail-closed evaluator. Parse errors and unsupported versions are
-// denied before any facts are inspected.
+// Conservative, fail-closed evaluator. Deny reasons are checked in a fixed,
+// explicit order so every fixture maps to a single stable reason code:
+//   1. parse error      2. unsupported version   3. multiple statements
+//   4. unknown top kind  5. utility statement     6. nested write
+//   7. context mutation  8. select into           9. unsafe function
+//  10. unsupported write
 export async function evaluateAstPolicy(sql, options = {}) {
   const { parserVersion } = options;
 
+  // 2. Unsupported parser version is refused before touching the parser/facts.
   if (!isSupportedVersion(parserVersion)) {
     return denyResult('unsupported_version', parserVersion, 'unsupported_version', emptyFacts());
   }
 
   const facts = await extractAstFacts(sql, { parserVersion });
 
+  // 1. Parse error takes precedence over every fact-based rule.
   if (facts.parseStatus === 'parse_error') {
     return denyResult('parse_error', parserVersion, 'parse_error', facts);
   }
 
-  const isSafeRead =
-    facts.statementCount === 1 &&
-    facts.topLevelKinds.length === 1 &&
-    facts.topLevelKinds[0] === 'SelectStmt' &&
-    facts.nestedWriteCount === 0 &&
-    !facts.hasUtilityStatement &&
-    !facts.hasContextMutation &&
-    !facts.hasSelectInto &&
-    facts.functionNames.length === 0;
+  const deny = (reasonCode) => denyResult(reasonCode, parserVersion, 'parsed', facts);
+  const topKind = facts.topLevelKinds[0] ?? null;
 
-  if (isSafeRead) {
+  // 3. The prototype only reasons about a single statement at a time.
+  if (facts.statementCount !== 1) {
+    return deny('multiple_statements');
+  }
+
+  // 4. Anything the prototype does not explicitly recognize fails closed.
+  const isKnownTopKind =
+    topKind === 'SelectStmt' || WRITE_KINDS.has(topKind) || UTILITY_KINDS.has(topKind);
+  if (!isKnownTopKind) {
+    return deny('unknown_statement');
+  }
+
+  // 5. Utility/dangerous statements (DO, DDL, COPY, transaction control, ...).
+  if (facts.hasUtilityStatement || UTILITY_KINDS.has(topKind)) {
+    return deny('utility_statement');
+  }
+
+  // 6. A write nested inside a CTE/subquery under a top-level select.
+  if (facts.nestedWriteCount > 0) {
+    return deny('nested_write');
+  }
+
+  // 7. Session/connection context mutation via known functions (set_config).
+  if (facts.hasContextMutation) {
+    return deny('context_mutation');
+  }
+
+  // 8. SELECT ... INTO materializes a new relation.
+  if (facts.hasSelectInto) {
+    return deny('select_into');
+  }
+
+  // 9. Any function that is not a recognized context-mutation name is unknown
+  //    behavior; safety is never inferred from syntax alone.
+  const hasUnsafeFunction = facts.functionNames.some(
+    (name) => !CONTEXT_MUTATION_FUNCTIONS.has(name),
+  );
+  if (hasUnsafeFunction) {
+    return deny('unsafe_function');
+  }
+
+  // 10. Top-level writes are out of scope for this read-only prototype.
+  if (WRITE_KINDS.has(topKind)) {
+    return deny('write_not_supported');
+  }
+
+  // Remaining shape: a single read-only SelectStmt with no flagged facts.
+  if (topKind === 'SelectStmt') {
     return {
       decision: 'allow',
       reasonCode: 'safe_read',
@@ -172,5 +218,5 @@ export async function evaluateAstPolicy(sql, options = {}) {
     };
   }
 
-  return denyResult('unsupported_shape', parserVersion, 'parsed', facts);
+  return deny('unsupported_shape');
 }
