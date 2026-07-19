@@ -1,0 +1,115 @@
+{
+  "nodeVersion": "v24.14.0",
+  "parserVersionsRequested": [
+    13,
+    14,
+    15,
+    16,
+    17,
+    18
+  ],
+  "supportedParserVersions": [
+    13,
+    14,
+    15,
+    16,
+    17,
+    18
+  ],
+  "corpusCount": 38,
+  "corpusGroupCounts": {
+    "policy": 14,
+    "compiler": 3,
+    "adversarial": 11,
+    "benchmark": 10
+  },
+  "iterations": 100,
+  "warmup": 20,
+  "generatedAt": "2026-07-19T01:47:13.242Z",
+  "versions": [
+    {
+      "parserVersion": 13,
+      "availability": "available",
+      "parseOnly": {
+        "count": 100,
+        "p50Us": 693.9000000000135,
+        "p95Us": 1280.300000000011
+      },
+      "completePath": {
+        "count": 100,
+        "p50Us": 1586.3999999999692,
+        "p95Us": 2759.899999999959
+      }
+    },
+    {
+      "parserVersion": 14,
+      "availability": "available",
+      "parseOnly": {
+        "count": 100,
+        "p50Us": 754.0000000000191,
+        "p95Us": 1312.400000000025
+      },
+      "completePath": {
+        "count": 100,
+        "p50Us": 1452.7000000000498,
+        "p95Us": 2395.6000000000586
+      }
+    },
+    {
+      "parserVersion": 15,
+      "availability": "available",
+      "parseOnly": {
+        "count": 100,
+        "p50Us": 755.0999999999704,
+        "p95Us": 1148.6999999999625
+      },
+      "completePath": {
+        "count": 100,
+        "p50Us": 1630.8999999998832,
+        "p95Us": 2801.099999999906
+      }
+    },
+    {
+      "parserVersion": 16,
+      "availability": "available",
+      "parseOnly": {
+        "count": 100,
+        "p50Us": 725.3000000000611,
+        "p95Us": 1286.0000000000582
+      },
+      "completePath": {
+        "count": 100,
+        "p50Us": 1374.0999999999985,
+        "p95Us": 2193.1999999999334
+      }
+    },
+    {
+      "parserVersion": 17,
+      "availability": "available",
+      "parseOnly": {
+        "count": 100,
+        "p50Us": 766.399999999976,
+        "p95Us": 1650.000000000091
+      },
+      "completePath": {
+        "count": 100,
+        "p50Us": 1948.3999999999924,
+        "p95Us": 4127.1999999999025
+      }
+    },
+    {
+      "parserVersion": 18,
+      "availability": "available",
+      "parseOnly": {
+        "count": 100,
+        "p50Us": 982.3999999998705,
+        "p95Us": 1807.0000000000164
+      },
+      "completePath": {
+        "count": 100,
+        "p50Us": 1440.0000000000546,
+        "p95Us": 2457.600000000184
+      }
+    }
+  ]
+}

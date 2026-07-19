@@ -11,6 +11,7 @@
     "dashboard": "node --env-file-if-exists=.env dashboard/server.mjs",
     "policy:simulate": "node bin/policy-simulate.mjs",
     "benchmark:ast": "node benchmarks/ast-parser-benchmark.mjs",
+    "benchmark:ast-policy": "node benchmarks/ast-policy-differential-benchmark.mjs",
     "test": "node --test"
   },
   "keywords": [],
