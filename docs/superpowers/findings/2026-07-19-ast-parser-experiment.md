@@ -6,7 +6,7 @@ Decision: **No-go for production migration in this experiment; keep the current 
 
 ## Executive result
 
-`@pgsql/parser` 1.5.0 successfully parsed all nine valid fixed fixtures on PostgreSQL parser versions 13, 14, 15, 16, 17, and 18. It also rejected the malformed fixture on every version with `syntax error at end of input`. The normalized AST shape was identical across the six versions for the tested statements, and all representative SQL emitted by the typed compiler parsed on every version.
+`@pgsql/parser` 1.5.0 successfully parsed all nine valid fixed fixtures on PostgreSQL parser versions 13, 14, 15, 16, 17, and 18. It also rejected the malformed fixture on every version with `syntax error at end of input`. The normalized AST shape was identical across the six versions for the tested statements. Typed/generated SQL compatibility was not directly validated by this benchmark and remains follow-up work.
 
 Those are useful compatibility results, but they do not establish production readiness. The benchmark used only ten small fixtures, the AST summary is not an authorization policy, and this run did not verify Node 22 or Docker. The parser also adds about 6.9 MB and 92 installed files, with a large native/WASM-backed external-memory increase during initialization. The current heuristic policy remains the production enforcement boundary.
 
@@ -19,9 +19,12 @@ Raw JSON was written outside the repository under:
 The full matrix command was run from the experiment worktree:
 
 ```powershell
+Set-Location C:\Users\abdil\projects\safeQL\.worktrees\ast-parser-experiment
+New-Item -ItemType Directory -Force $env:TEMP\safeQL-ast-task5 | Out-Null
 13,14,15,16,17,18 | ForEach-Object {
-  npm run --silent benchmark:ast -- --version $_ --iterations 5000 --warmup 500 |
-    Set-Content -Encoding utf8 "$env:TEMP\safeQL-ast-task5\pg$_.json"
+  $version = $_
+  npm run --silent benchmark:ast -- --version $version --iterations 5000 --warmup 500 |
+    Set-Content -Encoding utf8 "$env:TEMP\safeQL-ast-task5\pg$version.json"
 }
 ```
 
@@ -77,16 +80,9 @@ The heuristic evaluator denied the same five safety-sensitive fixtures on all ve
 
 ## Typed/generated SQL compatibility
 
-The following actual `compileCapabilityRequest` outputs were generated from the existing typed compiler and parsed on versions 13–18 without error:
+The benchmark only parses the fixed fixture list; it does not call `compileCapabilityRequest`. Therefore typed/generated SQL compatibility was **not directly validated by the Task 5 benchmark**, and no claim is made here that compiler output parsed on versions 13-18.
 
-| Generated operation | Statement kind | AST summary |
-|---|---|---|
-| Read with selector and limit | `SelectStmt` | 0 writes, 0 functions, 0 utilities |
-| Count aggregate with group and limit | `SelectStmt` | 0 writes, 1 function, 0 utilities |
-| Sum aggregate | `SelectStmt` | 0 writes, 1 function, 0 utilities |
-| Bounded `set_status` mutation | `UpdateStmt` | 1 write, 0 functions, 0 utilities |
-
-This covers the current compiler’s read, aggregate, and mutation forms exercised by `tests/sqlCompiler.test.mjs`; it is not a complete generated-SQL corpus.
+Follow-up work should add a small committed verification test that compiles representative read, aggregate, and mutation requests with `compileCapabilityRequest`, then parses each generated statement with every supported parser version. The existing `tests/sqlCompiler.test.mjs` verifies compiler output strings and values, but does not pass those outputs through the AST parser.
 
 ## Latency measurements
 
@@ -123,6 +119,14 @@ The three values in each cell are p50 / p95 / p99. The malformed fixture has no 
 
 `npm ls @pgsql/parser --all` reported `@pgsql/parser@1.5.0`. The runner measured the installed package tree itself:
 
+Run these measurements from the experiment worktree:
+
+```powershell
+Set-Location C:\Users\abdil\projects\safeQL\.worktrees\ast-parser-experiment
+npm ls @pgsql/parser --depth=0
+node --expose-gc benchmarks/ast-parser-benchmark.mjs --version 16 --iterations 1000 --warmup 100
+```
+
 | Observation | Value |
 |---|---:|
 | Installed package bytes | 6,880,981 (~6.56 MiB) |
@@ -156,18 +160,18 @@ The existing `evaluatePolicy` was measured separately from parser work. On every
 | Malformed SQL | deny: malformed `SELECT` |
 | Dollar-quoted literal | allow; destructive-looking text remains literal content |
 
-The AST parser provides structure that could support these checks, especially statement count, nested writes, utility nodes, and function calls. It does not by itself provide the current policy’s semantic guarantees for WHERE safety, literal/comment handling policy, function allowlists, or fail-closed authorization boundaries. A production migration would require a separate AST policy design and differential/adversarial corpus, not just swapping the parser.
+The AST parser provides structure that could support these checks, especially statement count, nested writes, utility nodes, and function calls. It does not by itself provide the current policy's semantic guarantees for WHERE safety, literal/comment handling policy, function allowlists, or fail-closed authorization boundaries. A production migration would require a separate AST policy design and differential/adversarial corpus, not just swapping the parser.
 
 ## Errors, rejections, and version compatibility
 
 The benchmark distinguishes parser errors from policy rejections. For the malformed fixture, all six versions produced 5000 parser errors and zero parser rejections; the heuristic produced zero thrown errors and 5000 policy rejections with reason `SQL appears malformed because SELECT has no target expression.` For each of writable CTE, `DROP TABLE`, `set_config`, and stacked statements, heuristic policy rejection counts were 5000 per version. Valid parser fixtures had zero parser errors and zero parser rejections.
 
-Unsupported parser selection remains fail-closed through the adapter’s explicit unsupported-version error. The supported-version list exposed by the pinned package is exactly `[13, 14, 15, 16, 17, 18]`.
+Unsupported parser selection remains fail-closed through the adapter's explicit unsupported-version error. The supported-version list exposed by the pinned package is exactly `[13, 14, 15, 16, 17, 18]`.
 
-The experiment used the adapter’s CommonJS loading workaround because the package’s ESM path is not usable in this environment. That workaround is isolated to experiment code. It is another reason not to treat the current result as production-ready without Node 22/Docker verification.
+The experiment used the adapter's CommonJS loading workaround because the package's ESM path is not usable in this environment. That workaround is isolated to experiment code. It is another reason not to treat the current result as production-ready without Node 22/Docker verification.
 
 ## Recommendation and next work
 
-**Go for continued investigation; no-go for later production migration yet.** The parser is promising for offline analysis and a future policy prototype: it is compatible with the six tested parser versions, handles the current typed SQL forms, preserves relevant AST structure in the fixed corpus, and warm parse-plus-summary latency was roughly 33–34 microseconds p50 for the representative complex CTE on this host.
+**Go for continued investigation; no-go for later production migration yet.** The parser is promising for offline analysis and a future policy prototype: it is compatible with the six tested parser versions, preserves relevant AST structure in the fixed corpus, and warm parse-plus-summary latency was roughly 33-34 microseconds p50 for the representative complex CTE on this host. Typed/generated SQL compatibility remains unvalidated follow-up work.
 
 Do not replace production enforcement based on this experiment. Before reconsidering the migration gate, add a substantially larger adversarial corpus covering every existing heuristic denial and allow rule, comments and nested literals, all compiler branches and policy-generated SQL, PostgreSQL extensions used by deployments, parser error stability, differential decision testing, long-lived memory behavior, Node 22, and Docker. The AST policy must be independently reviewed for fail-closed behavior and must preserve the existing typed boundary, identity checks, RLS context, audit ordering, and raw-query break-glass controls.
