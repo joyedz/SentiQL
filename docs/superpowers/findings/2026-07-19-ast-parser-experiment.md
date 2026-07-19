@@ -12,30 +12,40 @@ Those are useful compatibility results, but they do not establish production rea
 
 ## Reproduction and environment
 
-Raw JSON was written outside the repository under:
+Raw JSON was written outside the repository under unique directories such as:
 
-`%TEMP%\safeQL-ast-task5\pg13.json` through `pg18.json`
+`%TEMP%\safeQL-ast-task5-<unique-id>\pg13.json` through `pg18.json`
 
 The full matrix command was run from the experiment worktree:
 
 ```powershell
 Set-Location C:\Users\abdil\projects\safeQL\.worktrees\ast-parser-experiment
 npm ci
-New-Item -ItemType Directory -Force $env:TEMP\safeQL-ast-task5 | Out-Null
+$matrixDir = Join-Path $env:TEMP ('safeQL-ast-task5-' + [Guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Force $matrixDir | Out-Null
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 13,14,15,16,17,18 | ForEach-Object {
   $version = $_
   $stdout = npm run --silent benchmark:ast -- --version $version --iterations 5000 --warmup 500 | Out-String
   if ($LASTEXITCODE -ne 0) { throw "benchmark failed for PostgreSQL $version" }
-  $path = "$env:TEMP\safeQL-ast-task5\pg$version.json"
+  $path = Join-Path $matrixDir "pg$version.json"
   [System.IO.File]::WriteAllText($path, $stdout, $utf8NoBom)
 }
-Get-ChildItem "$env:TEMP\safeQL-ast-task5\pg*.json" | ForEach-Object {
-  node -e "JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'))" $_.FullName
+$expectedNames = 13..18 | ForEach-Object { "pg$_.json" }
+$actualNames = @(Get-ChildItem -LiteralPath $matrixDir -File | Select-Object -ExpandProperty Name)
+if ($actualNames.Count -ne 6 -or @($actualNames | Where-Object { $_ -notin $expectedNames }).Count -ne 0) {
+  throw 'matrix capture must contain exactly pg13.json through pg18.json'
+}
+foreach ($name in $expectedNames) {
+  $path = Join-Path $matrixDir $name
+  if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "missing matrix capture: $name" }
+  $bytes = [System.IO.File]::ReadAllBytes($path)
+  if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) { throw "BOM found in matrix capture: $name" }
+  node -e "JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'))" $path
 }
 ```
 
-The captured matrix files are BOM-free, and strict `JSON.parse` succeeds for every captured file.
+The captured matrix directory is unique and clean; existence checks validate exactly `pg13.json`, `pg14.json`, `pg15.json`, `pg16.json`, `pg17.json`, and `pg18.json`. Each file is BOM-free, and strict `JSON.parse` succeeds for every captured file.
 
 Environment recorded by the runner:
 
@@ -136,11 +146,12 @@ Run these measurements from the experiment worktree:
 Set-Location C:\Users\abdil\projects\safeQL\.worktrees\ast-parser-experiment
 npm ci
 npm ls @pgsql/parser --depth=0
-New-Item -ItemType Directory -Force $env:TEMP\safeQL-ast-task5 | Out-Null
+$memoryDir = Join-Path $env:TEMP ('safeQL-ast-task5-memory-' + [Guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Force $memoryDir | Out-Null
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 $stdout = node --expose-gc benchmarks/ast-parser-benchmark.mjs --version 16 --iterations 1000 --warmup 1000 | Out-String
 if ($LASTEXITCODE -ne 0) { throw 'memory benchmark failed for PostgreSQL 16' }
-$path = "$env:TEMP\safeQL-ast-task5\pg16-memory.json"
+$path = Join-Path $memoryDir 'pg16-memory.json'
 [System.IO.File]::WriteAllText($path, $stdout, $utf8NoBom)
 node -e "JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'))" $path
 ```
