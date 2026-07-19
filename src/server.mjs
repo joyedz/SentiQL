@@ -12,6 +12,8 @@ import { loadPolicyBundle } from './policyBundle.mjs';
 import { authorizeCapabilityRequest } from './semanticPolicy.mjs';
 import { compileCapabilityRequest } from './sqlCompiler.mjs';
 import { evaluatePolicy } from './policyEngine.mjs';
+import { evaluateAstPolicy } from './astPolicyExperiment.mjs';
+import { getSupportedAstParserVersions } from './astParserExperiment.mjs';
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -45,6 +47,55 @@ function clientSessionId(input) {
 
 export function resolveAuditPath(auditPath) {
   return isAbsolute(auditPath) ? auditPath : resolve(projectRoot, auditPath);
+}
+
+function resolvePolicyEngine(value) {
+  const engine = String(value ?? 'heuristic').trim().toLowerCase();
+  if (engine !== 'heuristic' && engine !== 'ast') {
+    throw new Error('POLICY_ENGINE must be either heuristic or ast.');
+  }
+  return engine;
+}
+
+export function resolveAstParserVersion(value = 16) {
+  const parserVersion = Number(value);
+  if (!Number.isInteger(parserVersion) || !getSupportedAstParserVersions().includes(parserVersion)) {
+    throw new Error(`AST_POLICY_PARSER_VERSION must be a supported integer parser version (${getSupportedAstParserVersions().join(', ')}).`);
+  }
+  return parserVersion;
+}
+
+async function evaluateAstPolicyWithDeadline(sql, {
+  evaluator,
+  parserVersion,
+  timeoutMs = 250,
+  setTimeoutFn = setTimeout,
+  clearTimeoutFn = clearTimeout,
+}) {
+  if (typeof evaluator !== 'function') throw new Error('AST policy evaluator unavailable.');
+  if (!Number.isFinite(timeoutMs) || timeoutMs < 0) throw new Error('AST policy evaluation timeout must be non-negative.');
+
+  let timeoutId;
+  try {
+    const evaluation = Promise.resolve().then(() => evaluator(sql, {
+      mode: 'read-only',
+      parserVersion,
+    }));
+    const timeout = new Promise((_, reject) => {
+      timeoutId = setTimeoutFn(() => reject(new Error('AST policy evaluation timed out.')), timeoutMs);
+    });
+    return await Promise.race([evaluation, timeout]);
+  } finally {
+    if (timeoutId !== undefined) clearTimeoutFn(timeoutId);
+  }
+}
+
+function isSafeAstAllow(result, parserVersion) {
+  return result && typeof result === 'object'
+    && result.decision === 'allow'
+    && result.reasonCode === 'safe_read'
+    && result.parseStatus === 'parsed'
+    && result.parserVersion === parserVersion;
 }
 
 /**
@@ -297,6 +348,17 @@ export async function processCapabilityRequest(input, dependencies = {}) {
   const auditDecision = async (decision, reason, extra = {}) => {
     await recordAudit(audit, { ...baseAudit, decision, reason, ...extra });
   };
+  let policyEngine;
+  let astParserVersion = null;
+  try {
+    policyEngine = resolvePolicyEngine(dependencies.policyEngine);
+    if (policyEngine === 'ast') {
+      astParserVersion = resolveAstParserVersion(dependencies.astPolicyParserVersion ?? 16);
+    }
+  } catch {
+    try { await auditDecision('deny', 'AST policy configuration is invalid.'); } catch { /* fail closed */ }
+    return response({ correlationId, decision: 'deny', reason: 'AST policy configuration is invalid.', policyVersion: policy?.version ?? null, policyHash: policy?.hash ?? null }, true);
+  }
   if (!policy || typeof policy !== 'object' || !policy.resources || !policy.grants) {
     try { await auditDecision('deny', 'Policy unavailable.'); } catch { /* fail closed */ }
     return response({ correlationId, decision: 'deny', reason: 'Policy unavailable.', policyVersion: null, policyHash: null }, true);
@@ -390,6 +452,29 @@ export async function processCapabilityRequest(input, dependencies = {}) {
     return response({ correlationId, decision: 'deny', reason: 'Capability compilation failed.', policyVersion: policy?.version ?? null, policyHash: policy?.hash ?? null }, true);
   }
 
+  const astAuthorityApplies = policyEngine === 'ast'
+    && input?.capability === 'data.read'
+    && compiled?.command === 'read';
+  if (astAuthorityApplies) {
+    let astDecision;
+    try {
+      astDecision = await evaluateAstPolicyWithDeadline(compiled.text, {
+        evaluator: dependencies.astPolicyEvaluator ?? evaluateAstPolicy,
+        parserVersion: astParserVersion,
+        timeoutMs: dependencies.astPolicyTimeoutMs ?? 250,
+        setTimeoutFn: dependencies.astPolicySetTimeout ?? setTimeout,
+        clearTimeoutFn: dependencies.astPolicyClearTimeout ?? clearTimeout,
+      });
+    } catch {
+      try { await auditDecision('deny', 'AST policy evaluation failed.', { sql: compiled.text }); } catch { /* fail closed */ }
+      return response({ correlationId, decision: 'deny', reason: 'AST policy evaluation failed.', policyVersion: policy?.version ?? null, policyHash: policy?.hash ?? null }, true);
+    }
+    if (!isSafeAstAllow(astDecision, astParserVersion)) {
+      try { await auditDecision('deny', 'AST policy denied generated SQL.', { sql: compiled.text }); } catch { /* fail closed */ }
+      return response({ correlationId, decision: 'deny', reason: 'AST policy denied generated SQL.', policyVersion: policy?.version ?? null, policyHash: policy?.hash ?? null }, true);
+    }
+  }
+
   try {
     await auditDecision('allow', decision.reason ?? 'Capability permitted.', { sql: compiled.text });
   } catch {
@@ -441,6 +526,10 @@ export async function startServer(overrides = {}) {
   if (!overrides.policy && !bundlePath) throw new Error('POLICY_BUNDLE_PATH is required to start SentiQL.');
   const loadBundle = overrides.loadBundle ?? loadPolicyBundle;
   const policy = overrides.policy ?? await loadBundle(resolve(projectRoot, bundlePath ?? './config/policy.json'));
+  const policyEngine = resolvePolicyEngine(overrides.policyEngine ?? process.env.POLICY_ENGINE ?? 'heuristic');
+  const astParserVersion = policyEngine === 'ast'
+    ? resolveAstParserVersion(overrides.astPolicyParserVersion ?? process.env.AST_POLICY_PARSER_VERSION ?? 16)
+    : null;
   const verifyIdentity = overrides.verifyIdentity ?? createIdentityVerifier(policy.identity);
   const rawEnabled = String(process.env.ENABLE_RAW_QUERY_COMPATIBILITY ?? '').toLowerCase() === 'true';
   const shadowEnabled = overrides.enableAstPolicyShadow
@@ -481,7 +570,20 @@ export async function startServer(overrides = {}) {
   });
   const getToken = overrides.getToken ?? (() => readWorkloadToken(process.env.OIDC_TOKEN_FILE));
   const server = new McpServer({ name: 'sentiql', version: '1.0.0' });
-  const capabilityDeps = { policy, audit, database, verifyIdentity, getToken, astPolicyShadow };
+  const capabilityDeps = {
+    policy,
+    audit,
+    database,
+    verifyIdentity,
+    getToken,
+    policyEngine,
+    astPolicyParserVersion: astParserVersion,
+    astPolicyEvaluator: overrides.astPolicyEvaluator ?? evaluateAstPolicy,
+    astPolicyTimeoutMs: overrides.astPolicyTimeoutMs,
+    astPolicySetTimeout: overrides.astPolicySetTimeout,
+    astPolicyClearTimeout: overrides.astPolicyClearTimeout,
+    astPolicyShadow,
+  };
   let rawDatabase = null;
 
   server.registerTool('schema_discover', {

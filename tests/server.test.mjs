@@ -448,3 +448,192 @@ test('startServer wires an injected shadow only when the feature flag is enabled
     else process.env.POSTGRES_URL = previousPostgres;
   }
 });
+
+
+function astReadInput() {
+  return { capability: 'data.read', resource: 'cases', purpose: 'support', fields: ['id'], limit: 1 };
+}
+
+function astReadDependencies(overrides = {}) {
+  return capabilityDeps({
+    policyEngine: 'ast',
+    authorize: () => ({ decision: 'allow', reason: 'Allowed.', constraints: { fields: ['id'], selectorFields: [], maxRows: 1 } }),
+    compile: () => ({ command: 'read', text: 'SELECT id FROM cases WHERE id = $1', values: ['case-1'] }),
+    evaluate: () => ({ decision: 'allow', reason: 'Heuristic allow.' }),
+    execute: async () => ({ rows: [{ id: 'case-1' }], command: 'SELECT', rowCount: 1 }),
+    ...overrides,
+  });
+}
+
+test('AST mode allows data.read only when heuristic and AST both allow', async () => {
+  const events = [];
+  let astOptions;
+  const result = await processCapabilityRequest(astReadInput(), astReadDependencies({
+    authorize: () => {
+      events.push('semantic');
+      return { decision: 'allow', reason: 'Allowed.', constraints: {} };
+    },
+    compile: () => {
+      events.push('compile');
+      return { command: 'read', text: 'SELECT id FROM cases WHERE id = $1', values: ['case-1'] };
+    },
+    evaluate: () => {
+      events.push('heuristic');
+      return { decision: 'allow', reason: 'Heuristic allow.' };
+    },
+    astPolicyEvaluator: async (_sql, options) => {
+      events.push('ast:start');
+      astOptions = options;
+      await Promise.resolve();
+      events.push('ast:end');
+      return { decision: 'allow', reasonCode: 'safe_read', parseStatus: 'parsed', parserVersion: 16 };
+    },
+    audit: { record: (entry) => events.push(`audit:${entry.decision}:${entry.databaseOutcome ?? 'pending'}`) },
+    execute: async () => {
+      events.push('execute');
+      return { rows: [], command: 'SELECT', rowCount: 0 };
+    },
+  }));
+
+  assert.equal(result.isError, undefined);
+  assert.deepEqual(events, [
+    'semantic', 'compile', 'heuristic', 'ast:start', 'ast:end',
+    'audit:allow:pending', 'execute', 'audit:allow:success',
+  ]);
+  assert.deepEqual(astOptions, { mode: 'read-only', parserVersion: 16 });
+});
+
+test('AST denial blocks execution and records only a safe deny', async () => {
+  const audits = [];
+  let executed = false;
+  const result = await processCapabilityRequest(astReadInput(), astReadDependencies({
+    astPolicyEvaluator: async () => ({ decision: 'deny', reasonCode: 'unsafe_function', facts: { sql: 'secret' } }),
+    audit: { record: (entry) => audits.push(entry) },
+    execute: async () => { executed = true; },
+  }));
+
+  assert.equal(executed, false);
+  assert.equal(result.isError, true);
+  assert.match(JSON.parse(result.content[0].text).reason, /AST policy denied/i);
+  assert.deepEqual(audits.map((entry) => entry.decision), ['deny']);
+  assert.equal(audits[0].reason, 'AST policy denied generated SQL.');
+});
+
+test('AST parse errors, unsupported versions, and evaluator rejection fail closed before execution', async () => {
+  const failures = [
+    { name: 'parse error', value: { decision: 'deny', reasonCode: 'parse_error' } },
+    { name: 'unsupported parser version', value: { decision: 'deny', reasonCode: 'unsupported_version' } },
+    { name: 'unknown result', value: {} },
+    { name: 'evaluator rejection', value: Promise.reject(new Error('parser unavailable')) },
+  ];
+
+  for (const failure of failures) {
+    let executed = false;
+    const audits = [];
+    const result = await processCapabilityRequest(astReadInput(), astReadDependencies({
+      astPolicyEvaluator: async () => failure.value,
+      audit: { record: (entry) => audits.push(entry) },
+      execute: async () => { executed = true; },
+    }));
+    assert.equal(executed, false, failure.name);
+    assert.equal(result.isError, true, failure.name);
+    assert.deepEqual(audits.map((entry) => entry.decision), ['deny'], failure.name);
+  }
+});
+
+test('AST evaluation timeout fails closed without heuristic fallback', async () => {
+  let executed = false;
+  let heuristicCalls = 0;
+  const audits = [];
+  const result = await processCapabilityRequest(astReadInput(), astReadDependencies({
+    evaluate: () => {
+      heuristicCalls += 1;
+      return { decision: 'allow', reason: 'Heuristic allow.' };
+    },
+    astPolicyTimeoutMs: 5,
+    astPolicyEvaluator: () => new Promise(() => {}),
+    audit: { record: (entry) => audits.push(entry) },
+    execute: async () => { executed = true; },
+  }));
+
+  assert.equal(heuristicCalls, 1);
+  assert.equal(executed, false);
+  assert.equal(result.isError, true);
+  assert.deepEqual(audits.map((entry) => entry.decision), ['deny']);
+  assert.match(JSON.parse(result.content[0].text).reason, /AST policy evaluation failed/i);
+});
+
+test('heuristic mode remains unchanged and never invokes AST authority', async () => {
+  let astCalls = 0;
+  let executed = false;
+  const result = await processCapabilityRequest(astReadInput(), capabilityDeps({
+    authorize: () => ({ decision: 'allow', reason: 'Allowed.', constraints: {} }),
+    astPolicyEvaluator: async () => {
+      astCalls += 1;
+      throw new Error('AST must not run');
+    },
+    compile: () => ({ command: 'read', text: 'SELECT id FROM cases WHERE id = 1', values: [] }),
+    evaluate: () => ({ decision: 'allow', reason: 'Heuristic allow.' }),
+    execute: async () => {
+      executed = true;
+      return { rows: [], command: 'SELECT', rowCount: 0 };
+    },
+  }));
+
+  assert.equal(result.isError, undefined);
+  assert.equal(executed, true);
+  assert.equal(astCalls, 0);
+});
+
+test('AST mode does not authorize aggregate, mutate, schema discovery, or raw compatibility', async () => {
+  let astCalls = 0;
+  const common = {
+    policyEngine: 'ast',
+    authorize: () => ({ decision: 'allow', reason: 'Allowed.', constraints: {} }),
+    evaluate: () => ({ decision: 'allow', reason: 'Heuristic allow.' }),
+    astPolicyEvaluator: async () => { astCalls += 1; return { decision: 'allow' }; },
+    audit: { record: () => {} },
+  };
+
+  await processCapabilityRequest({ capability: 'data.aggregate', resource: 'cases', purpose: 'support', metric: { op: 'count' } }, capabilityDeps({
+    ...common,
+    compile: () => ({ command: 'aggregate', text: 'SELECT count(*) FROM cases', values: [] }),
+    execute: async () => ({ rows: [], command: 'SELECT', rowCount: 0 }),
+  }));
+  await processCapabilityRequest({ capability: 'data.mutate', resource: 'cases', purpose: 'support', action: 'set_status', selector: { field: 'id', op: 'eq', value: 'case-1' }, values: { status: 'closed' } }, capabilityDeps({
+    ...common,
+    compile: () => ({ command: 'write', text: 'UPDATE cases SET status = $1', values: ['closed'] }),
+    execute: async () => ({ rows: [], command: 'UPDATE', rowCount: 1 }),
+  }));
+  await processCapabilityRequest({ capability: 'schema.discover', resource: 'cases', purpose: 'support' }, capabilityDeps({
+    ...common,
+    execute: async () => { throw new Error('schema must not execute'); },
+  }));
+  await processRawCompatibilityRequest({ sql: 'SELECT 1' }, {
+    policyEngine: 'ast',
+    astPolicyEvaluator: async () => { astCalls += 1; return { decision: 'deny' }; },
+    breakGlassReason: 'test compatibility',
+    getToken: async () => 'token',
+    verifyIdentity: async () => principal,
+    execute: async () => ({ rows: [], command: 'SELECT', rowCount: 0 }),
+    audit: { record: () => {} },
+  });
+
+  assert.equal(astCalls, 0);
+});
+
+test('startServer validates AST parser configuration before serving', async () => {
+  await assert.rejects(
+    () => startServer({
+      policy,
+      policyEngine: 'ast',
+      astPolicyParserVersion: 'unsupported',
+      database: { executeCompiled: async () => ({ rows: [], rowCount: 0 }), close: async () => {} },
+      audit: { record: () => {}, close: () => {} },
+      verifyIdentity: async () => principal,
+      getToken: async () => 'token',
+      transport: { async start() {}, async send() {}, async close() {} },
+    }),
+    /AST_POLICY_PARSER_VERSION.*supported/i,
+  );
+});
