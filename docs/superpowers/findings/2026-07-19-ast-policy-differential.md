@@ -177,3 +177,85 @@ Even with these closed, production migration remains a separate change requiring
 rollout controls, a documented parser-version compatibility policy, and
 database-aware semantic validation beyond syntax. This experiment should not be
 read as evidence that a syntax AST can replace those controls.
+
+## Phase 5: manual review gates and read-only evidence
+
+The pilot review gates are evidence gates, not an enforcement approval workflow. A
+report is eligible for manual consideration only after all of the following
+collection thresholds are met:
+
+- at least a **7-day observation window**;
+- at least **100 total shadow records**; and
+- at least **20 typed-capability records**.
+
+A report that does not meet any threshold is `insufficient_data`. That status is
+not evidence for promotion, and neither is a small or otherwise clean-looking
+sample. A `clean_review` result also does **not** automatically authorize AST
+policy promotion; it only means that the bounded report had no recorded safety
+or integrity signal under the configured observation window and thresholds.
+
+Before any future AST-policy design work, a human reviewer must inspect every
+record in each of these categories:
+
+1. every `ast_allow_heuristic_deny` widening, with an explanation for why it is
+   safe or why the classification is not promotion evidence;
+2. every parse error, with the parser input class and operational cause reviewed
+   without exposing raw SQL or request data; and
+3. every unsupported-parser-version result, including the deployment/version
+   compatibility decision.
+
+Promotion consideration additionally requires **zero unexplained
+`ast_allow_heuristic_deny` records**, a measured parse-error rate that remains
+within the bounded pilot limit, and parser-version consistency throughout the
+window. The measured rate is `parse_errors / totalRecords` for the explicit
+window; the current conservative operational bound for a `clean_review` result
+is zero parse errors, because any non-zero parse-error count produces
+`review_required`. A future promotion proposal must define and justify any
+non-zero numeric tolerance separately rather than infer one from this report.
+Any non-zero safety signal remains a mandatory human-review item even when the
+aggregate rate is small. Parser drift, integrity failures, and any unexplained
+widening require review and are not promotion evidence.
+
+The Phase 5 behavior tests provide local evidence for the read-only boundary:
+`tests/astPolicyIsolation.test.mjs` runs the real `processCapabilityRequest`
+seam with injected authorization, heuristic evaluation, execution, and SQLite
+audit collaborators, then invokes both the report CLI and dashboard review
+route. The test asserts that allow and deny responses remain identical, the
+execution and heuristic-evaluation counters do not change during review, and
+both ordinary audit records and shadow-review aggregates are byte-for-byte
+unchanged. The report and dashboard use only the bounded shadow read model;
+there is no MCP or outbound network call in the report path.
+
+### Signals that are explicitly not promotion evidence
+
+The following must never be described as evidence to widen or replace the
+heuristic policy:
+
+- `insufficient_data`, regardless of whether the records observed so far are
+  clean;
+- safety or integrity signals, including widenings, parse errors, unsupported
+  parser results, or malformed stored events;
+- parser-version drift or any unsupported parser-version result; and
+- any widening that has not received an explicit human explanation and review.
+
+### Residual risks
+
+The observation data remains local, bounded, and digest-only. It does not show
+whether database permissions, `search_path`, extensions, RLS, schema changes,
+planner behavior, or database-version semantics make an apparently safe AST
+shape safe at execution time. The corpus and pilot window may omit rare query
+shapes, deployment environments, parser regressions, and identity or request
+context interactions. Parse-error and unsupported-version rates can also be
+biased by the observed workload. A clean bounded report cannot resolve these
+risks, and the dashboard/CLI read-only tests do not constitute database or
+security validation.
+
+## Recommendation
+
+**Do not promote AST enforcement in this phase.** Continue heuristic-authoritative
+operation and collect only the bounded, privacy-preserving shadow evidence
+under the gates above. Any future enforcement proposal requires a separate
+security design, explicit human review of all safety-sensitive records, broader
+adversarial and compiler coverage, parser/deployment compatibility evidence, and
+database-aware validation; no automatic promotion or fallback is authorized by
+this finding.

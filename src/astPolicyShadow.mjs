@@ -5,25 +5,46 @@ import { classifyDecision } from './astPolicyDifferential.mjs';
 
 const SHADOW_SOURCES = new Set(['raw_query_compatibility', 'typed_capability']);
 const SHADOW_MODES = new Set(['read-only', 'read-write']);
+const SHADOW_CONTRACT_VERSION = 1;
+const MAX_FACT_ITEMS = 32;
+const MAX_FACT_STRING_LENGTH = 64;
+const MAX_FACT_COUNT = 1000;
 
 function sqlDigest(sql) {
   return `sha256:${createHash('sha256').update(typeof sql === 'string' ? sql : '', 'utf8').digest('hex')}`;
 }
 
 function compactFacts(facts = {}) {
+  if (facts === null || typeof facts !== 'object' || Array.isArray(facts)) {
+    throw new Error('Invalid AST policy shadow facts.');
+  }
   const whereClauseSafety = ['absent', 'trivial', 'non_trivial', 'unknown'].includes(facts.whereClauseSafety)
     ? facts.whereClauseSafety
-    : 'unknown';
+    : facts.whereClauseSafety === undefined ? 'unknown' : null;
+  if (whereClauseSafety === null) throw new Error('Invalid AST policy shadow where clause safety.');
+  const statementCount = facts.statementCount === undefined ? 0 : facts.statementCount;
+  const nestedWriteCount = facts.nestedWriteCount === undefined ? 0 : facts.nestedWriteCount;
+  if (!Number.isInteger(statementCount) || statementCount < 0 || statementCount > MAX_FACT_COUNT) {
+    throw new Error('Invalid AST policy shadow statement count.');
+  }
+  if (!Number.isInteger(nestedWriteCount) || nestedWriteCount < 0 || nestedWriteCount > MAX_FACT_COUNT) {
+    throw new Error('Invalid AST policy shadow nested write count.');
+  }
+  const topLevelKinds = facts.topLevelKinds === undefined ? [] : facts.topLevelKinds;
+  if (!Array.isArray(topLevelKinds) || topLevelKinds.length > MAX_FACT_ITEMS || topLevelKinds.some(
+    (kind) => typeof kind !== 'string' || kind.length > MAX_FACT_STRING_LENGTH || !/^[A-Za-z][A-Za-z0-9_]*$/.test(kind),
+  )) {
+    throw new Error('Invalid AST policy shadow top-level kinds.');
+  }
+  for (const field of ['hasSelectInto', 'hasUtilityStatement', 'hasContextMutation', 'hasTrivialWhere']) {
+    if (facts[field] !== undefined && typeof facts[field] !== 'boolean') {
+      throw new Error(`Invalid AST policy shadow ${field}.`);
+    }
+  }
   return {
-    statementCount: Number.isInteger(facts.statementCount) && facts.statementCount >= 0
-      ? facts.statementCount
-      : 0,
-    topLevelKinds: Array.isArray(facts.topLevelKinds)
-      ? facts.topLevelKinds.filter((kind) => typeof kind === 'string')
-      : [],
-    nestedWriteCount: Number.isInteger(facts.nestedWriteCount) && facts.nestedWriteCount >= 0
-      ? facts.nestedWriteCount
-      : 0,
+    statementCount,
+    topLevelKinds,
+    nestedWriteCount,
     hasSelectInto: facts.hasSelectInto === true,
     hasUtilityStatement: facts.hasUtilityStatement === true,
     hasContextMutation: facts.hasContextMutation === true,
@@ -86,11 +107,13 @@ export function createAstPolicyShadow({
           reasonDiffers: heuristicDecision === 'deny' && ast?.decision === 'deny',
         });
         const event = {
+          contractVersion: SHADOW_CONTRACT_VERSION,
           timestamp: new Date().toISOString(),
           correlationId: typeof correlationId === 'string' ? correlationId : null,
           source: normalizedSource(source),
           mode: normalizedMode(mode),
           parserVersion,
+          parserVersionValidity: 'supported',
           sqlDigest: sqlDigest(sql),
           heuristicDecision: heuristicDecision === 'allow' ? 'allow' : 'deny',
           astDecision: ast?.decision === 'allow' ? 'allow' : 'deny',
