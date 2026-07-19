@@ -20,6 +20,7 @@ The full matrix command was run from the experiment worktree:
 
 ```powershell
 Set-Location C:\Users\abdil\projects\safeQL\.worktrees\ast-parser-experiment
+npm ci
 New-Item -ItemType Directory -Force $env:TEMP\safeQL-ast-task5 | Out-Null
 13,14,15,16,17,18 | ForEach-Object {
   $version = $_
@@ -47,6 +48,8 @@ Node 22 verification was not available in this environment: the measured runtime
 Verification evidence:
 
 ```powershell
+Set-Location C:\Users\abdil\projects\safeQL\.worktrees\ast-parser-experiment
+npm ci
 npm run --silent benchmark:ast -- --version 16 --iterations 100 --warmup 20
 ```
 
@@ -117,14 +120,16 @@ The three values in each cell are p50 / p95 / p99. The malformed fixture has no 
 
 ## Package and memory observations
 
-`npm ls @pgsql/parser --all` reported `@pgsql/parser@1.5.0`. The runner measured the installed package tree itself:
+`npm ls @pgsql/parser --depth=0` reported `@pgsql/parser@1.5.0`. The runner measured the installed package tree itself:
 
 Run these measurements from the experiment worktree:
 
 ```powershell
 Set-Location C:\Users\abdil\projects\safeQL\.worktrees\ast-parser-experiment
+npm ci
 npm ls @pgsql/parser --depth=0
-node --expose-gc benchmarks/ast-parser-benchmark.mjs --version 16 --iterations 1000 --warmup 100
+New-Item -ItemType Directory -Force $env:TEMP\safeQL-ast-task5 | Out-Null
+node --expose-gc benchmarks/ast-parser-benchmark.mjs --version 16 --iterations 1000 --warmup 1000 | Set-Content -Encoding utf8 "$env:TEMP\safeQL-ast-task5\pg16-memory.json"
 ```
 
 | Observation | Value |
