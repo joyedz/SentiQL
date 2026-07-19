@@ -2,6 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { astPolicyCorpus } from '../src/astPolicyCorpus.mjs';
+import {
+  classifyDecision,
+  runDifferential,
+  summarizeDifferential,
+} from '../src/astPolicyDifferential.mjs';
 
 // The single explicitly-named fixture that is permitted to carry empty SQL so
 // the differential harness can exercise the parse-error / empty path.
@@ -78,4 +83,171 @@ test('expected heuristic decision matches evaluatePolicy at read time', async ()
       `expectedHeuristicDecision drift for ${testCase.id}`,
     );
   }
+});
+
+// --- Task 4: classification ------------------------------------------------
+
+test('classifyDecision returns match when both allow', () => {
+  const classification = classifyDecision({
+    heuristicDecision: 'allow',
+    astDecision: 'allow',
+    astParseStatus: 'parsed',
+    astReasonCode: 'safe_read',
+  });
+
+  assert.equal(classification, 'match');
+});
+
+test('classifyDecision flags an AST denial of a heuristic allow', () => {
+  const classification = classifyDecision({
+    heuristicDecision: 'allow',
+    astDecision: 'deny',
+    astParseStatus: 'parsed',
+    astReasonCode: 'unsafe_function',
+  });
+
+  assert.equal(classification, 'ast_deny_heuristic_allow');
+});
+
+test('classifyDecision flags a safety-sensitive AST widening', () => {
+  const classification = classifyDecision({
+    heuristicDecision: 'deny',
+    astDecision: 'allow',
+    astParseStatus: 'parsed',
+    astReasonCode: 'safe_read',
+  });
+
+  assert.equal(classification, 'ast_allow_heuristic_deny');
+});
+
+test('classifyDecision reports a reason difference when both deny and reasonDiffers', () => {
+  const classification = classifyDecision({
+    heuristicDecision: 'deny',
+    astDecision: 'deny',
+    astParseStatus: 'parsed',
+    astReasonCode: 'utility_statement',
+    reasonDiffers: true,
+  });
+
+  assert.equal(classification, 'decision_match_reason_diff');
+});
+
+test('classifyDecision treats matching denials without reason diff as match', () => {
+  const classification = classifyDecision({
+    heuristicDecision: 'deny',
+    astDecision: 'deny',
+    astParseStatus: 'parsed',
+    astReasonCode: 'utility_statement',
+    reasonDiffers: false,
+  });
+
+  assert.equal(classification, 'match');
+});
+
+test('classifyDecision reports parse errors ahead of decision comparison', () => {
+  const classification = classifyDecision({
+    heuristicDecision: 'allow',
+    astDecision: 'deny',
+    astParseStatus: 'parse_error',
+    astReasonCode: 'parse_error',
+  });
+
+  assert.equal(classification, 'parse_error');
+});
+
+test('classifyDecision reports unsupported parse status', () => {
+  const byStatus = classifyDecision({
+    heuristicDecision: 'deny',
+    astDecision: 'deny',
+    astParseStatus: 'unsupported_version',
+    astReasonCode: 'unsupported_version',
+  });
+  assert.equal(byStatus, 'unsupported');
+
+  const byReasonCode = classifyDecision({
+    heuristicDecision: 'allow',
+    astDecision: 'deny',
+    astParseStatus: 'parsed',
+    astReasonCode: 'unsupported_version',
+  });
+  assert.equal(byReasonCode, 'unsupported');
+});
+
+// --- Task 4: runDifferential -----------------------------------------------
+
+const READ_CASE = Object.freeze({
+  id: 'unit-read',
+  sql: 'SELECT id FROM users WHERE id = 1',
+  mode: 'read-only',
+  source: 'policy',
+  notes: 'unit case',
+  expectedHeuristicDecision: 'allow',
+});
+
+test('runDifferential returns one record per case and version', async () => {
+  const records = await runDifferential({ corpus: [READ_CASE], parserVersions: [16] });
+
+  assert.equal(records.length, 1);
+  const [record] = records;
+  assert.equal(record.sqlId, 'unit-read');
+  assert.equal(record.parserVersion, 16);
+  assert.equal(typeof record.heuristic.decision, 'string');
+  assert.equal(typeof record.heuristic.reason, 'string');
+  assert.equal(typeof record.ast.decision, 'string');
+  assert.equal(typeof record.ast.reasonCode, 'string');
+  assert.equal(typeof record.ast.parseStatus, 'string');
+  assert.ok(record.ast.facts && typeof record.ast.facts === 'object');
+  assert.equal(typeof record.classification, 'string');
+});
+
+test('runDifferential produces a record per version', async () => {
+  const records = await runDifferential({ corpus: [READ_CASE], parserVersions: [15, 16] });
+
+  assert.equal(records.length, 2);
+  assert.deepEqual(records.map((r) => r.parserVersion).sort(), [15, 16]);
+});
+
+test('runDifferential marks unavailable parser versions distinctly', async () => {
+  const records = await runDifferential({ corpus: [READ_CASE], parserVersions: [12] });
+
+  assert.equal(records.length, 1);
+  const [record] = records;
+  assert.equal(record.classification, 'unsupported');
+  assert.equal(record.parserAvailability, 'unavailable_version');
+});
+
+test('runDifferential classifies a simple compiler read as a match', async () => {
+  const records = await runDifferential({ corpus: [READ_CASE], parserVersions: [16] });
+  assert.equal(records[0].classification, 'match');
+});
+
+test('summarizeDifferential groups totals and surfaces widenings and unavailable versions', async () => {
+  const records = await runDifferential({
+    corpus: [READ_CASE],
+    parserVersions: [12, 16],
+  });
+  const summary = summarizeDifferential(records);
+
+  assert.equal(summary.totalRecords, 2);
+  assert.ok(summary.byParserVersion[16]);
+  assert.ok(summary.byParserVersion[12]);
+  assert.equal(summary.byParserVersion[12].availability, 'unavailable_version');
+  assert.equal(typeof summary.byClassification.unsupported, 'number');
+  assert.ok(Array.isArray(summary.safetySensitiveWidenings));
+  assert.deepEqual(summary.unavailableVersions, [12]);
+});
+
+test('summarizeDifferential lists safety-sensitive widenings', () => {
+  const widening = {
+    sqlId: 'synthetic',
+    parserVersion: 16,
+    parserAvailability: 'available',
+    heuristic: { decision: 'deny', reason: 'denied' },
+    ast: { decision: 'allow', reasonCode: 'safe_read', parseStatus: 'parsed', facts: {} },
+    classification: 'ast_allow_heuristic_deny',
+  };
+  const summary = summarizeDifferential([widening]);
+
+  assert.equal(summary.safetySensitiveWidenings.length, 1);
+  assert.equal(summary.safetySensitiveWidenings[0].sqlId, 'synthetic');
 });
