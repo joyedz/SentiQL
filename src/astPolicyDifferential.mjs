@@ -70,6 +70,8 @@ function compactFacts(facts = {}) {
     hasSelectInto: facts.hasSelectInto ?? false,
     hasUtilityStatement: facts.hasUtilityStatement ?? false,
     hasContextMutation: facts.hasContextMutation ?? false,
+    whereClauseSafety: facts.whereClauseSafety ?? 'unknown',
+    hasTrivialWhere: facts.hasTrivialWhere ?? false,
   };
 }
 

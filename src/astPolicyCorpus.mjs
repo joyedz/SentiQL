@@ -81,6 +81,15 @@ const seedCases = [
   { id: 'compiler-mutate', sql: compiledMutate.text, mode: 'read-write', source: 'compiler', notes: 'Compiler mutate output (UPDATE ... RETURNING), evaluated in read-write mode.' },
 
   // --- Source: adversarial fixtures ---------------------------------------
+  { id: 'adversarial-noop-where-constant-equality', sql: 'SELECT * FROM users WHERE 1=1', mode: 'read-only', source: 'adversarial', notes: 'Constant equality predicate that does not depend on row data.' },
+  { id: 'adversarial-noop-where-true', sql: 'SELECT * FROM users WHERE TRUE', mode: 'read-only', source: 'adversarial', notes: 'Bare TRUE predicate.' },
+  { id: 'adversarial-noop-where-false', sql: 'SELECT * FROM users WHERE FALSE', mode: 'read-only', source: 'adversarial', notes: 'Bare FALSE predicate.' },
+  { id: 'adversarial-noop-where-null', sql: 'SELECT * FROM users WHERE NULL', mode: 'read-only', source: 'adversarial', notes: 'Bare NULL predicate.' },
+  { id: 'adversarial-noop-where-not-false', sql: 'SELECT * FROM users WHERE NOT FALSE', mode: 'read-only', source: 'adversarial', notes: 'Constant boolean negation predicate.' },
+  { id: 'adversarial-noop-where-constant-comparison', sql: 'SELECT * FROM users WHERE 2 > 1', mode: 'read-only', source: 'adversarial', notes: 'Constant comparison predicate.' },
+  { id: 'adversarial-noop-where-cast-comparison', sql: 'SELECT * FROM users WHERE 1::int = 1::int', mode: 'read-only', source: 'adversarial', notes: 'Cast-wrapped constant comparison predicate.' },
+  { id: 'adversarial-noop-where-string', sql: "SELECT * FROM users WHERE 'always true'", mode: 'read-only', source: 'adversarial', notes: 'Bare string literal predicate.' },
+  { id: 'adversarial-unknown-where-or-true', sql: 'SELECT id FROM users WHERE id = 1 OR TRUE', mode: 'read-only', source: 'adversarial', notes: 'Mixed boolean predicate that the structural classifier must fail closed.' },
   { id: 'adversarial-comment-keyword', sql: '-- DROP TABLE users\nSELECT id FROM users WHERE id = 1', mode: 'read-only', source: 'adversarial', notes: 'Destructive keyword hidden in a line comment.' },
   { id: 'adversarial-literal-keyword', sql: "SELECT 'DELETE FROM accounts; DROP TABLE x' AS note", mode: 'read-only', source: 'adversarial', notes: 'Keyword-looking text inside a string literal.' },
   { id: 'adversarial-dollar-quoted', sql: 'SELECT $tag$DROP TABLE users;$tag$ AS payload', mode: 'read-only', source: 'adversarial', notes: 'Dollar-quoted literal hiding a destructive statement.' },

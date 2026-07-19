@@ -14,6 +14,31 @@ const EMPTY_SQL_FIXTURE_ID = 'adversarial-empty';
 
 const REQUIRED_SOURCES = ['policy', 'compiler', 'benchmark', 'adversarial'];
 
+const ADVERSARIAL_PREDICATE_FIXTURES = Object.freeze([
+  'adversarial-noop-where-constant-equality',
+  'adversarial-noop-where-true',
+  'adversarial-noop-where-false',
+  'adversarial-noop-where-null',
+  'adversarial-noop-where-not-false',
+  'adversarial-noop-where-constant-comparison',
+  'adversarial-noop-where-cast-comparison',
+  'adversarial-noop-where-string',
+  'adversarial-unknown-where-or-true',
+]);
+
+const PREDICATE_REASON_BY_ID = new Map([
+  ['policy-noop-where', 'trivial_where'],
+  ['adversarial-noop-where-constant-equality', 'trivial_where'],
+  ['adversarial-noop-where-true', 'trivial_where'],
+  ['adversarial-noop-where-false', 'trivial_where'],
+  ['adversarial-noop-where-null', 'trivial_where'],
+  ['adversarial-noop-where-not-false', 'trivial_where'],
+  ['adversarial-noop-where-constant-comparison', 'trivial_where'],
+  ['adversarial-noop-where-cast-comparison', 'trivial_where'],
+  ['adversarial-noop-where-string', 'trivial_where'],
+  ['adversarial-unknown-where-or-true', 'unknown_where'],
+]);
+
 test('every corpus case has the required shape', () => {
   for (const testCase of astPolicyCorpus) {
     assert.equal(typeof testCase.id, 'string', 'id must be a string');
@@ -47,6 +72,15 @@ test('corpus covers every required source group', () => {
   for (const source of REQUIRED_SOURCES) {
     const count = astPolicyCorpus.filter((testCase) => testCase.source === source).length;
     assert.ok(count >= 1, `expected at least one case sourced from ${source}`);
+  }
+});
+
+test('corpus includes explicit read-only adversarial predicate fixtures', () => {
+  for (const id of ADVERSARIAL_PREDICATE_FIXTURES) {
+    const testCase = astPolicyCorpus.find((candidate) => candidate.id === id);
+    assert.ok(testCase, `expected adversarial predicate fixture ${id}`);
+    assert.equal(testCase.source, 'adversarial', `${id} must be adversarial`);
+    assert.equal(testCase.mode, 'read-only', `${id} must be read-only`);
   }
 });
 
@@ -197,6 +231,8 @@ test('runDifferential returns one record per case and version', async () => {
   assert.equal(typeof record.ast.reasonCode, 'string');
   assert.equal(typeof record.ast.parseStatus, 'string');
   assert.ok(record.ast.facts && typeof record.ast.facts === 'object');
+  assert.equal(typeof record.ast.facts.whereClauseSafety, 'string');
+  assert.equal(typeof record.ast.facts.hasTrivialWhere, 'boolean');
   assert.equal(typeof record.classification, 'string');
 });
 
@@ -250,4 +286,39 @@ test('summarizeDifferential lists safety-sensitive widenings', () => {
 
   assert.equal(summary.safetySensitiveWidenings.length, 1);
   assert.equal(summary.safetySensitiveWidenings[0].sqlId, 'synthetic');
+});
+
+test('no-op and ambiguous predicate cases fail closed at parser v16', async () => {
+  const corpus = astPolicyCorpus.filter((testCase) => PREDICATE_REASON_BY_ID.has(testCase.id));
+  const records = await runDifferential({ corpus, parserVersions: [16] });
+
+  assert.equal(records.length, PREDICATE_REASON_BY_ID.size);
+  for (const record of records) {
+    assert.equal(record.ast.decision, 'deny', record.sqlId);
+    assert.equal(record.ast.reasonCode, PREDICATE_REASON_BY_ID.get(record.sqlId), record.sqlId);
+    assert.notEqual(record.classification, 'ast_allow_heuristic_deny', record.sqlId);
+  }
+});
+
+test('full supported matrix has no safety-sensitive widening or compiler parse error', { timeout: 120000 }, async () => {
+  const parserVersions = [13, 14, 15, 16, 17, 18];
+  const records = await runDifferential({ corpus: astPolicyCorpus, parserVersions });
+  const summary = summarizeDifferential(records);
+
+  assert.equal(records.length, astPolicyCorpus.length * parserVersions.length);
+  assert.equal(summary.safetySensitiveWidenings.length, 0);
+  assert.equal(
+    records.filter((record) => record.classification === 'ast_allow_heuristic_deny').length,
+    0,
+  );
+
+  const compilerRecords = records.filter((record) =>
+    astPolicyCorpus.find((testCase) => testCase.id === record.sqlId)?.source === 'compiler',
+  );
+  assert.equal(compilerRecords.length, 3 * parserVersions.length);
+  assert.equal(
+    compilerRecords.filter((record) => record.classification === 'parse_error').length,
+    0,
+  );
+  assert.ok(compilerRecords.every((record) => record.parserAvailability === 'available'));
 });

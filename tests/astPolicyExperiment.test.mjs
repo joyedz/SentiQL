@@ -137,3 +137,57 @@ test('denies an unknown function call as unsafe_function', async () => {
   assert.equal(result.decision, 'deny');
   assert.equal(result.reasonCode, 'unsafe_function');
 });
+
+const TRIVIAL_WHERE_FIXTURES = [
+  'SELECT * FROM users WHERE 1=1',
+  'SELECT * FROM users WHERE TRUE',
+  'SELECT * FROM users WHERE FALSE',
+  'SELECT * FROM users WHERE NULL',
+  'SELECT * FROM users WHERE NOT FALSE',
+  'SELECT * FROM users WHERE 2 > 1',
+  'SELECT * FROM users WHERE 1::int = 1::int',
+  "SELECT * FROM users WHERE 'always true'",
+];
+
+for (const sql of TRIVIAL_WHERE_FIXTURES) {
+  test(`denies trivial WHERE predicate ${JSON.stringify(sql)}`, async () => {
+    const result = await evaluateAstPolicy(sql, { parserVersion: 16 });
+
+    assert.equal(result.decision, 'deny');
+    assert.equal(result.reasonCode, 'trivial_where');
+    assert.equal(result.facts.whereClauseSafety, 'trivial');
+    assert.equal(result.facts.hasTrivialWhere, true);
+  });
+}
+
+test('allows positively established non-trivial column and parameter predicates', async () => {
+  for (const sql of [
+    'SELECT id FROM users WHERE id = 1',
+    'SELECT id FROM users WHERE id = $1',
+  ]) {
+    const result = await evaluateAstPolicy(sql, { parserVersion: 16 });
+
+    assert.equal(result.decision, 'allow', sql);
+    assert.equal(result.reasonCode, 'safe_read', sql);
+    assert.equal(result.facts.whereClauseSafety, 'non_trivial', sql);
+    assert.equal(result.facts.hasTrivialWhere, false, sql);
+  }
+});
+
+test('denies ambiguous WHERE predicates with an explicit stable reason', async () => {
+  const result = await evaluateAstPolicy('SELECT id FROM users WHERE id = 1 OR TRUE', {
+    parserVersion: 16,
+  });
+
+  assert.equal(result.decision, 'deny');
+  assert.equal(result.reasonCode, 'unknown_where');
+  assert.equal(result.facts.whereClauseSafety, 'unknown');
+  assert.equal(result.facts.hasTrivialWhere, false);
+});
+
+test('normalizes absent WHERE predicate facts', async () => {
+  const facts = await extractAstFacts('SELECT id FROM users', { parserVersion: 16 });
+
+  assert.equal(facts.whereClauseSafety, 'absent');
+  assert.equal(facts.hasTrivialWhere, false);
+});

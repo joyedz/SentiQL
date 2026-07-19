@@ -56,6 +56,82 @@ function readFunctionName(funcCall) {
     .toLowerCase();
 }
 
+const COMPARISON_OPERATORS = new Set(['=', '!=', '<>', '<', '>', '<=', '>=']);
+
+function wrappedNode(node, ...keys) {
+  if (!node || typeof node !== 'object') return null;
+  for (const key of keys) {
+    const value = node[key];
+    if (value && typeof value === 'object') return value;
+  }
+  return null;
+}
+
+function unwrapTypeCast(node) {
+  let current = node;
+  let typeCast = wrappedNode(current, 'TypeCast', 'typeCast');
+  while (typeCast) {
+    current = typeCast.arg;
+    typeCast = wrappedNode(current, 'TypeCast', 'typeCast');
+  }
+  return current;
+}
+
+// This intentionally recognizes only literal nodes, without interpreting their
+// value. A literal is enough to establish that a bare predicate is not tied to
+// row data or a supplied parameter.
+function isConstantExpression(node) {
+  const unwrapped = unwrapTypeCast(node);
+  return Boolean(wrappedNode(unwrapped, 'A_Const', 'AConst', 'Const'));
+}
+
+function isColumnOrParameterReference(node) {
+  const unwrapped = unwrapTypeCast(node);
+  return Boolean(wrappedNode(unwrapped, 'ColumnRef', 'columnRef', 'ParamRef', 'paramRef'));
+}
+
+function readComparisonOperator(aExpr) {
+  const firstPart = Array.isArray(aExpr?.name) ? aExpr.name[0] : null;
+  const stringNode = wrappedNode(firstPart, 'String', 'string');
+  const value = stringNode?.sval ?? stringNode?.str ?? null;
+  return typeof value === 'string' ? value : null;
+}
+
+function classifyWhereClause(whereClause) {
+  if (!whereClause) return 'absent';
+
+  const unwrapped = unwrapTypeCast(whereClause);
+  if (isConstantExpression(unwrapped)) return 'trivial';
+
+  const boolExpr = wrappedNode(unwrapped, 'BoolExpr', 'boolExpr');
+  if (boolExpr) {
+    const args = Array.isArray(boolExpr.args) ? boolExpr.args : [];
+    // Deliberately narrow: NOT of a literal is still constant-only. Other
+    // boolean forms are unknown rather than partially evaluated.
+    if (boolExpr.boolop === 'NOT_EXPR' && args.length === 1 && isConstantExpression(args[0])) {
+      return 'trivial';
+    }
+    return 'unknown';
+  }
+
+  const aExpr = wrappedNode(unwrapped, 'A_Expr', 'aExpr');
+  const operator = readComparisonOperator(aExpr);
+  if (!aExpr || !COMPARISON_OPERATORS.has(operator)) return 'unknown';
+
+  const { lexpr, rexpr } = aExpr;
+  if (isConstantExpression(lexpr) && isConstantExpression(rexpr)) return 'trivial';
+
+  const leftIsReference = isColumnOrParameterReference(lexpr);
+  const rightIsReference = isColumnOrParameterReference(rexpr);
+  const leftIsKnownValue = leftIsReference || isConstantExpression(lexpr);
+  const rightIsKnownValue = rightIsReference || isConstantExpression(rexpr);
+  if ((leftIsReference && rightIsKnownValue) || (rightIsReference && leftIsKnownValue)) {
+    return 'non_trivial';
+  }
+
+  return 'unknown';
+}
+
 function emptyFacts() {
   return {
     statementCount: 0,
@@ -68,6 +144,8 @@ function emptyFacts() {
     hasSelectInto: false,
     hasUtilityStatement: false,
     hasContextMutation: false,
+    whereClauseSafety: 'unknown',
+    hasTrivialWhere: false,
   };
 }
 
@@ -94,6 +172,10 @@ export async function extractAstFacts(sql, { parserVersion } = {}) {
 
   const functionNames = [];
   let hasSelectInto = false;
+  const topLevelSelect = result.statements?.[0]?.raw?.SelectStmt ?? null;
+  const whereClauseSafety = topLevelSelect
+    ? classifyWhereClause(topLevelSelect.whereClause)
+    : 'unknown';
 
   walkNodes(result.raw, (node) => {
     for (const key of Object.keys(node)) {
@@ -124,6 +206,8 @@ export async function extractAstFacts(sql, { parserVersion } = {}) {
     hasSelectInto,
     hasUtilityStatement: summary.utilityNodeCount > 0,
     hasContextMutation,
+    whereClauseSafety,
+    hasTrivialWhere: whereClauseSafety === 'trivial',
   };
 }
 
@@ -141,8 +225,8 @@ function denyResult(reasonCode, parserVersion, parseStatus, facts) {
 // explicit order so every fixture maps to a single stable reason code:
 //   1. parse error      2. unsupported version   3. multiple statements
 //   4. unknown top kind  5. utility statement     6. nested write
-//   7. context mutation  8. select into           9. unsafe function
-//  10. unsupported write
+//   7. context mutation  8. select into           9. WHERE predicate
+//  10. unsafe function   11. unsupported write
 export async function evaluateAstPolicy(sql, options = {}) {
   const { parserVersion } = options;
 
@@ -193,8 +277,18 @@ export async function evaluateAstPolicy(sql, options = {}) {
     return deny('select_into');
   }
 
-  // 9. Any function that is not a recognized context-mutation name is unknown
-  //    behavior; safety is never inferred from syntax alone.
+  // 9. A SELECT predicate must be absent, constant-only (denied), or
+  // positively established as data/parameter dependent. Ambiguous AST shapes
+  // fail closed rather than receiving partial boolean-expression evaluation.
+  if (topKind === 'SelectStmt' && facts.whereClauseSafety === 'trivial') {
+    return deny('trivial_where');
+  }
+  if (topKind === 'SelectStmt' && facts.whereClauseSafety === 'unknown') {
+    return deny('unknown_where');
+  }
+
+  // 10. Any function that is not a recognized context-mutation name is unknown
+  //     behavior; safety is never inferred from syntax alone.
   const hasUnsafeFunction = facts.functionNames.some(
     (name) => !CONTEXT_MUTATION_FUNCTIONS.has(name),
   );
@@ -202,7 +296,7 @@ export async function evaluateAstPolicy(sql, options = {}) {
     return deny('unsafe_function');
   }
 
-  // 10. Top-level writes are out of scope for this read-only prototype.
+  // 11. Top-level writes are out of scope for this read-only prototype.
   if (WRITE_KINDS.has(topKind)) {
     return deny('write_not_supported');
   }
