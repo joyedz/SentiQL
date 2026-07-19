@@ -22,12 +22,20 @@ The full matrix command was run from the experiment worktree:
 Set-Location C:\Users\abdil\projects\safeQL\.worktrees\ast-parser-experiment
 npm ci
 New-Item -ItemType Directory -Force $env:TEMP\safeQL-ast-task5 | Out-Null
+$utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 13,14,15,16,17,18 | ForEach-Object {
   $version = $_
-  npm run --silent benchmark:ast -- --version $version --iterations 5000 --warmup 500 |
-    Set-Content -Encoding utf8 "$env:TEMP\safeQL-ast-task5\pg$version.json"
+  $stdout = npm run --silent benchmark:ast -- --version $version --iterations 5000 --warmup 500 | Out-String
+  if ($LASTEXITCODE -ne 0) { throw "benchmark failed for PostgreSQL $version" }
+  $path = "$env:TEMP\safeQL-ast-task5\pg$version.json"
+  [System.IO.File]::WriteAllText($path, $stdout, $utf8NoBom)
+}
+Get-ChildItem "$env:TEMP\safeQL-ast-task5\pg*.json" | ForEach-Object {
+  node -e "JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'))" $_.FullName
 }
 ```
+
+The captured matrix files are BOM-free, and strict `JSON.parse` succeeds for every captured file.
 
 Environment recorded by the runner:
 
@@ -129,8 +137,15 @@ Set-Location C:\Users\abdil\projects\safeQL\.worktrees\ast-parser-experiment
 npm ci
 npm ls @pgsql/parser --depth=0
 New-Item -ItemType Directory -Force $env:TEMP\safeQL-ast-task5 | Out-Null
-node --expose-gc benchmarks/ast-parser-benchmark.mjs --version 16 --iterations 1000 --warmup 1000 | Set-Content -Encoding utf8 "$env:TEMP\safeQL-ast-task5\pg16-memory.json"
+$utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+$stdout = node --expose-gc benchmarks/ast-parser-benchmark.mjs --version 16 --iterations 1000 --warmup 1000 | Out-String
+if ($LASTEXITCODE -ne 0) { throw 'memory benchmark failed for PostgreSQL 16' }
+$path = "$env:TEMP\safeQL-ast-task5\pg16-memory.json"
+[System.IO.File]::WriteAllText($path, $stdout, $utf8NoBom)
+node -e "JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'))" $path
 ```
+
+The captured memory file is BOM-free, and strict `JSON.parse` succeeds on it.
 
 | Observation | Value |
 |---|---:|
