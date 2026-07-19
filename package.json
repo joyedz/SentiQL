@@ -10,6 +10,7 @@
     "start": "node --env-file-if-exists=.env src/server.mjs",
     "dashboard": "node --env-file-if-exists=.env dashboard/server.mjs",
     "policy:simulate": "node bin/policy-simulate.mjs",
+    "benchmark:ast": "node benchmarks/ast-parser-benchmark.mjs",
     "test": "node --test"
   },
   "keywords": [],
@@ -21,5 +22,8 @@
     "jose": "^6.2.3",
     "pg": "^8.16.3",
     "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@pgsql/parser": "1.5.0"
   }
 }
