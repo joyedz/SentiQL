@@ -48,11 +48,14 @@
       </section>
       <section aria-labelledby="audit-title">
         <h2 id="audit-title">AUDIT ENTRIES</h2>
+        <h3>AUDIT SUMMARY</h3>
+        <div id="audit-summary" class="cards" aria-live="polite"></div>
         <div id="entries" aria-live="polite"></div>
       </section>
     </main>
     <script>
       const container = document.getElementById('entries');
+      const auditSummary = document.getElementById('audit-summary');
       const status = document.getElementById('status');
       const shadowSummary = document.getElementById('shadow-summary');
       const shadowBreakdowns = document.getElementById('shadow-breakdowns');
@@ -89,6 +92,17 @@
       }
 
       function render(entries) {
+        auditSummary.replaceChildren();
+        const counts = entries.reduce((result, entry) => {
+          const decision = ['allow', 'deny', 'approval_required', 'error'].includes(entry.decision) ? entry.decision : 'error';
+          result.total += 1;
+          result[decision] += 1;
+          return result;
+        }, { total: 0, allow: 0, deny: 0, approval_required: 0, error: 0 });
+        auditSummary.append(renderCard('total decisions', counts.total));
+        auditSummary.append(renderCard('allowed', counts.allow, 'allow'));
+        auditSummary.append(renderCard('denied', counts.deny, counts.deny ? 'warning' : 'ok'));
+        auditSummary.append(renderCard('approval required', counts.approval_required, counts.approval_required ? 'warning' : 'ok'));
         container.replaceChildren();
         if (!entries.length) { container.append(element('p', 'empty', 'No audit entries recorded.')); return; }
         for (const entry of entries) {

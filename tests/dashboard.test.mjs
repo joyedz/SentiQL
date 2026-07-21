@@ -127,6 +127,8 @@ test('contains a separate digest-only AST shadow review UI', async (t) => {
   const html = await response.text();
 
   assert.match(html, /AST SHADOW REVIEW/);
+  assert.match(html, /AUDIT SUMMARY/);
+  assert.match(html, /audit-summary/);
   assert.match(html, /ast-shadow-review/);
   assert.match(html, /sqlDigest/);
   assert.doesNotMatch(html, /event\.sql\b/);
