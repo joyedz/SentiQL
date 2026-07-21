@@ -29,6 +29,11 @@
       .count-row { display: flex; justify-content: space-between; gap: 1rem; padding-top: .45rem; font-size: .78rem; }
       .shadow-event { display: grid; grid-template-columns: 11rem 15rem 8rem 8rem minmax(16rem, 1fr); gap: .65rem; padding: .7rem 0; border-bottom: 1px solid #1b2834; font-size: .78rem; }
       .digest { color: #9fb8ca; overflow-wrap: anywhere; }
+      .shadow-panel { padding: 0; }
+      .shadow-panel > summary { cursor: pointer; padding: 1rem; color: #9fb8ca; font-size: .8rem; letter-spacing: .05em; text-transform: uppercase; }
+      .shadow-panel > summary::marker { color: #79d69c; }
+      .shadow-panel[open] > summary { border-bottom: 1px solid #263542; color: #e7f4ff; }
+      .shadow-content { padding: 1rem; }
       @media (max-width: 760px) { .entry, .shadow-event { grid-template-columns: 1fr; gap: .25rem; } .entry-label { display: inline; margin-right: .5rem; } }
     </style>
   </head>
@@ -38,14 +43,16 @@
       <div id="status">connecting…</div>
     </header>
     <main>
-      <section aria-labelledby="shadow-title">
-        <h2 id="shadow-title">AST SHADOW REVIEW</h2>
-        <div id="shadow-status" class="feed-status">connecting…</div>
-        <div id="shadow-summary" class="cards" aria-live="polite"></div>
-        <div id="shadow-breakdowns" class="breakdowns"></div>
-        <h3>Recent normalized observations</h3>
-        <div id="shadow-events" aria-live="polite"></div>
-      </section>
+      <details class="shadow-panel">
+        <summary id="shadow-title">AST SHADOW REVIEW · research feed</summary>
+        <div class="shadow-content">
+          <div id="shadow-status" class="feed-status">connecting…</div>
+          <div id="shadow-summary" class="cards" aria-live="polite"></div>
+          <div id="shadow-breakdowns" class="breakdowns"></div>
+          <h3>Recent normalized observations</h3>
+          <div id="shadow-events" aria-live="polite"></div>
+        </div>
+      </details>
       <section aria-labelledby="audit-title">
         <h2 id="audit-title">AUDIT ENTRIES</h2>
         <h3>AUDIT SUMMARY</h3>
