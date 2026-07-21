@@ -50,6 +50,42 @@ The dashboard is available at [http://127.0.0.1:3030](http://127.0.0.1:3030). It
 
 `npm start` and `npm run dashboard` load `.env` when present. The supplied Compose service exposes PostgreSQL 16 at `127.0.0.1:5432`. Compose bootstraps with the distinct `sentiql_bootstrap` owner, while SentiQL connects as the non-owner `sentiql_app` role.
 
+## Demo walkthrough
+
+The fastest reproducible demo has three parts: an offline policy decision, the PostgreSQL RLS boundary, and the audit console.
+
+### 1. Show a governed allow decision
+
+This command needs no database, token, network, or running server:
+
+```sh
+npm run policy:simulate -- --bundle ./config/policy.example.json --fixture ./fixtures/support-read.json
+```
+
+The output includes `decision: "allow"`, the policy version/hash, the tenant row scope, the permitted fields, and the maximum row count. To show fail-closed behavior, change the fixture's requested field or purpose and run the same command again; the command exits non-zero with a controlled denial.
+
+### 2. Show tenant isolation in PostgreSQL
+
+Start the synthetic database, then run the two tenant checks from the deployment section below. The same application role sees only its own two rows for `tenant-a` and `tenant-b`; the bootstrap owner is separate and the application role is `NOBYPASSRLS`.
+
+```sh
+docker compose up -d
+docker compose exec -T -e PGPASSWORD=sentiql_app postgres psql -U sentiql_app -d sentiql -c "BEGIN; SELECT set_config('app.tenant_id', 'tenant-a', true); SELECT id, tenant_id, status FROM crm.support_cases ORDER BY id; COMMIT;"
+docker compose exec -T -e PGPASSWORD=sentiql_app postgres psql -U sentiql_app -d sentiql -c "BEGIN; SELECT set_config('app.tenant_id', 'tenant-b', true); SELECT id, tenant_id, status FROM crm.support_cases ORDER BY id; COMMIT;"
+```
+
+### 3. Show the audit trail
+
+In another terminal, start the local console and open [http://127.0.0.1:3030](http://127.0.0.1:3030):
+
+```sh
+npm run dashboard
+```
+
+The console displays recent decisions and their correlation ID, capability, purpose, policy version/hash, decision, reason, database outcome, and row count. Production MCP requests require the OIDC workload-token configuration described below; the offline simulator is the zero-credential path for reviewers.
+
+For a short video, capture the three steps in this order: allowed policy output, tenant-a versus tenant-b row isolation, and the dashboard showing the resulting audit metadata. Close by showing `npm test` and the line reporting all tests passed.
+
 ## Policy bundle and simulation
 
 `POLICY_BUNDLE_PATH` points to a versioned JSON policy bundle (the example is `config/policy.example.json`). It defines OIDC issuer/claim mappings, typed resources, tenant row scope, purposes, field permissions, and mutation limits. Bundles are validated and hashed at load time; the hash is included in every semantic audit event.
