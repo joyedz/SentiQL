@@ -2,6 +2,12 @@
 
 SentiQL is a self-hosted semantic firewall for AI-agent-to-PostgreSQL access. It authenticates workload identity, authorizes typed capabilities against a versioned policy bundle, compiles bounded SQL, enforces PostgreSQL RLS, writes every decision to a local SQLite audit log, and includes a small internal audit console.
 
+## Built with Codex during the hackathon
+
+SentiQL was built end-to-end with OpenAI Codex during the OpenAI Build Week hackathon submission window. Codex was used throughout the implementation and iteration of the MCP server, semantic policy engine, workload identity verification, bounded SQL compiler, PostgreSQL RLS demo, audit console, AST safety research, deterministic simulations, tests, and documentation.
+
+The repository preserves the development record: the Git commit history contains the implementation progression, while the dated files under `docs/superpowers/` and `semantic-review/` record the design decisions, experiments, verification evidence, and research findings. The Devpost submission should include the `/feedback` Codex Session ID for the project thread where the core functionality was built.
+
 ## Why SentiQL
 
 SentiQL gives agents a governed semantic boundary instead of unrestricted database access. An agent requests an approved business capability—such as reading support cases or changing a case status—not an arbitrary table, column, tenant predicate, or SQL statement. SentiQL maps that request to a versioned policy, generates bounded parameterized SQL, and lets PostgreSQL enforce the final row boundary through RLS.
