@@ -54,6 +54,37 @@ construct that lacks an explicit AST policy. This matrix must be copied into
 the simulation manifest and launch decision so no capability is included by
 interpretation.
 
+## Sequential capability adoption
+
+AST adoption proceeds one capability scope at a time. The project may use one
+runtime mode such as `POLICY_ENGINE=ast`, but that mode must consult an explicit
+capability matrix; it must not imply that every capability is AST-authorized.
+A scope is enabled only after its own design, corpus, simulation, integration
+tests, staging validation, and maintainer approval pass. An incomplete scope
+must deny or remain explicitly outside AST authority; it must not silently fall
+back to the heuristic evaluator.
+
+The required progression is:
+
+1. **`data.read`** — first scope. Approve only the typed read compiler shapes
+   covered by the read-only AST corpus.
+2. **`data.aggregate`** — second scope, only after aggregate function,
+   grouping, result, tenant, and predicate semantics have their own design and
+   evidence. It must not be inferred from `data.read` approval.
+3. **`data.mutate`** — third scope, only after bounded write, approval,
+   transaction, predicate, maximum-row, RLS, and rollback semantics are
+   separately implemented and tested.
+4. **Raw query compatibility** — final scope, only after arbitrary SQL,
+   function, utility, multiple-statement, extension, and resource-limit
+   behavior has a separate security design and corpus. Typed-capability
+   evidence never transfers to raw SQL.
+
+Each later scope starts with the same controlled three-agent simulation pattern
+and receives a separate launch decision. Scope expansion does not require a
+production observation window for this greenfield project, but it does require
+that the previous scope remains passing and that the new scope has no unresolved
+security, isolation, privacy, audit, correctness, or resource-budget failures.
+
 ## Non-goals and preserved safeguards
 
 - Do not replace semantic authorization, policy-bundle validation, RLS, transaction mode, audit ordering, or database safeguards.
@@ -221,12 +252,13 @@ Rollback must be a feature-flag/configuration change, must not require data migr
 ## Implementation sequence
 
 1. Preserve and review the completed Phase 1–5 offline evidence.
-2. Freeze the initial typed read-only scope and parser/policy versions.
-3. Run Phase 0 preflight and the controlled three-agent simulation.
-4. Implement AST authority at the policy decision point with fail-closed handling and no automatic fallback.
-5. Run the simulation and deterministic staging/load validation with the scoped flag enabled.
-6. Obtain security and service-maintainer approval, then enable default AST mode only for the approved scope.
-7. Treat aggregate, mutation, function allowlisting, raw SQL, parser upgrades, and scope expansion as separate design and test decisions.
+2. Freeze the initial `data.read` scope, parser version, policy version/hash, and corpus revision.
+3. Run Phase 0 preflight and the controlled three-agent simulation for `data.read`.
+4. Implement awaited AST authority at the policy decision point for `data.read` with fail-closed handling and no automatic fallback.
+5. Run `data.read` simulation and deterministic staging/load validation with the scoped flag enabled.
+6. Obtain security and service-maintainer approval, then enable default AST mode only for the approved `data.read` shapes.
+7. After `data.read` acceptance, repeat the same design → corpus → simulation → integration → staging → approval sequence for `data.aggregate`, then `data.mutate`, then raw query compatibility. Do not combine scope approvals or infer one scope's safety from another.
+8. Treat parser upgrades, policy/compiler changes, function allowlisting, and any scope expansion as new compatibility and review decisions.
 
 ## Final recommendation
 
