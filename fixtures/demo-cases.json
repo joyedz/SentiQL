@@ -1,0 +1,139 @@
+[
+  {
+    "name": "Allowed tenant-scoped read",
+    "expectedDecision": "allow",
+    "principal": {
+      "subject": "demo-support-agent",
+      "organization": "demo-org",
+      "tenantId": "tenant-a",
+      "roles": ["support-agent"]
+    },
+    "request": {
+      "capability": "data.read",
+      "resource": "crm.support_cases",
+      "purpose": "customer_support",
+      "fields": ["id", "status"],
+      "limit": 10
+    }
+  },
+  {
+    "name": "Allowed filtered read",
+    "expectedDecision": "allow",
+    "principal": {
+      "subject": "demo-support-agent",
+      "organization": "demo-org",
+      "tenantId": "tenant-a",
+      "roles": ["support-agent"]
+    },
+    "request": {
+      "capability": "data.read",
+      "resource": "crm.support_cases",
+      "purpose": "customer_support",
+      "fields": ["id", "status", "priority"],
+      "selector": {"field": "status", "op": "eq", "value": "open"},
+      "limit": 20
+    }
+  },
+  {
+    "name": "Denied unauthorized field",
+    "expectedDecision": "deny",
+    "principal": {
+      "subject": "demo-support-agent",
+      "organization": "demo-org",
+      "tenantId": "tenant-a",
+      "roles": ["support-agent"]
+    },
+    "request": {
+      "capability": "data.read",
+      "resource": "crm.support_cases",
+      "purpose": "customer_support",
+      "fields": ["id", "internal_notes"]
+    }
+  },
+  {
+    "name": "Denied invalid purpose",
+    "expectedDecision": "deny",
+    "principal": {
+      "subject": "demo-support-agent",
+      "organization": "demo-org",
+      "tenantId": "tenant-a",
+      "roles": ["support-agent"]
+    },
+    "request": {
+      "capability": "data.read",
+      "resource": "crm.support_cases",
+      "purpose": "marketing",
+      "fields": ["id", "status"]
+    }
+  },
+  {
+    "name": "Allowed bounded mutation",
+    "expectedDecision": "allow",
+    "principal": {
+      "subject": "demo-support-agent",
+      "organization": "demo-org",
+      "tenantId": "tenant-a",
+      "roles": ["support-agent"]
+    },
+    "request": {
+      "capability": "data.mutate",
+      "resource": "crm.support_cases",
+      "action": "set_status",
+      "selector": {"field": "id", "op": "eq", "value": "case-101"},
+      "values": {"status": "in_progress"},
+      "purpose": "customer_support"
+    }
+  },
+  {
+    "name": "Approval required for escalation",
+    "expectedDecision": "approval_required",
+    "principal": {
+      "subject": "demo-support-agent",
+      "organization": "demo-org",
+      "tenantId": "tenant-a",
+      "roles": ["support-agent"]
+    },
+    "request": {
+      "capability": "data.mutate",
+      "resource": "crm.support_cases",
+      "action": "set_status",
+      "selector": {"field": "id", "op": "eq", "value": "case-102"},
+      "values": {"status": "escalated"},
+      "purpose": "customer_support"
+    }
+  },
+  {
+    "name": "Denied unknown resource",
+    "expectedDecision": "deny",
+    "principal": {
+      "subject": "demo-support-agent",
+      "organization": "demo-org",
+      "tenantId": "tenant-a",
+      "roles": ["support-agent"]
+    },
+    "request": {
+      "capability": "data.read",
+      "resource": "crm.payments",
+      "purpose": "customer_support",
+      "fields": ["id"]
+    }
+  },
+  {
+    "name": "Denied mutation field",
+    "expectedDecision": "deny",
+    "principal": {
+      "subject": "demo-support-agent",
+      "organization": "demo-org",
+      "tenantId": "tenant-a",
+      "roles": ["support-agent"]
+    },
+    "request": {
+      "capability": "data.mutate",
+      "resource": "crm.support_cases",
+      "action": "set_status",
+      "selector": {"field": "id", "op": "eq", "value": "case-103"},
+      "values": {"priority": 1},
+      "purpose": "customer_support"
+    }
+  }
+]

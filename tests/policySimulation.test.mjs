@@ -91,3 +91,15 @@ test('CLI emits a readable summary with --pretty', async () => {
   assert.equal(pretty.stdout.trimStart().startsWith('{'), false);
   assert.equal(pretty.stderr, '');
 });
+
+test('CLI runs the deterministic multi-case demo', () => {
+  const cliPath = join(projectRoot, 'bin', 'policy-simulate.mjs');
+  const demo = spawnSync(process.execPath, [cliPath, '--demo', '--pretty'], { encoding: 'utf8' });
+
+  assert.equal(demo.status, 0);
+  assert.match(demo.stdout, /SentiQL policy demo: 8 cases/);
+  assert.match(demo.stdout, /PASS 01 .*Allowed tenant-scoped read.*ALLOW/);
+  assert.match(demo.stdout, /PASS 06 .*Approval required for escalation.*APPROVAL_REQUIRED/);
+  assert.match(demo.stdout, /Summary: 8 passed, 0 failed/);
+  assert.equal(demo.stderr, '');
+});

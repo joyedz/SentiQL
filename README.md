@@ -58,19 +58,27 @@ The dashboard is available at [http://127.0.0.1:3030](http://127.0.0.1:3030). It
 
 ## Demo walkthrough
 
-The fastest reproducible demo has three parts: an offline policy decision, the PostgreSQL RLS boundary, and the audit console.
+The fastest reproducible demo has four parts: a multi-case offline policy decision, synthetic audit data, the PostgreSQL RLS boundary, and the audit console.
 
 ### 1. Show a governed allow decision
 
-This command needs no database, token, network, or running server:
+This command needs no database, token, network, or running server. It evaluates eight deterministic allow, deny, and approval cases:
 
 ```sh
-npm run policy:simulate -- --bundle ./config/policy.example.json --fixture ./fixtures/support-read.json --pretty
+npm run policy:simulate -- --demo --pretty
 ```
 
-The `--pretty` flag prints a judge-friendly summary containing the decision, policy version/hash, tenant row scope, permitted fields, and maximum row count. Omit `--pretty` when a machine-readable JSON response is needed. To show fail-closed behavior, change the fixture's requested field or purpose and run the same command again; the command exits non-zero with a controlled denial.
+The `--pretty` flag prints a judge-friendly case-by-case summary. The original one-fixture form remains available, and omitting `--pretty` produces machine-readable JSON.
 
-### 2. Show tenant isolation in PostgreSQL
+### 2. Populate synthetic audit data
+
+This creates eight clearly labeled, redacted demo events for the dashboard. It does not call PostgreSQL or use credentials:
+
+```sh
+npm run demo:seed
+```
+
+### 3. Show tenant isolation in PostgreSQL
 
 Start the synthetic database, then run the two tenant checks from the deployment section below. The same application role sees only its own two rows for `tenant-a` and `tenant-b`; the bootstrap owner is separate and the application role is `NOBYPASSRLS`.
 
@@ -80,7 +88,7 @@ docker compose exec -T -e PGPASSWORD=sentiql_app postgres psql -U sentiql_app -d
 docker compose exec -T -e PGPASSWORD=sentiql_app postgres psql -U sentiql_app -d sentiql -c "BEGIN; SELECT set_config('app.tenant_id', 'tenant-b', true); SELECT id, tenant_id, status FROM crm.support_cases ORDER BY id; COMMIT;"
 ```
 
-### 3. Show the audit trail
+### 4. Show the audit trail
 
 In another terminal, start the local console and open [http://127.0.0.1:3030](http://127.0.0.1:3030):
 
@@ -88,9 +96,9 @@ In another terminal, start the local console and open [http://127.0.0.1:3030](ht
 npm run dashboard
 ```
 
-The console displays recent decisions and their correlation ID, capability, purpose, policy version/hash, decision, reason, database outcome, and row count. Production MCP requests require the OIDC workload-token configuration described below; the offline simulator is the zero-credential path for reviewers.
+The console displays recent decisions and their correlation ID, capability, purpose, policy version/hash, decision, reason, database outcome, and row count. Production MCP requests require the OIDC workload-token configuration described below; the offline simulator and demo seed are zero-credential paths for reviewers.
 
-For a short video, capture the three steps in this order: allowed policy output, tenant-a versus tenant-b row isolation, and the dashboard showing the resulting audit metadata. Close by showing `npm test` and the line reporting all tests passed.
+For a short video, capture the four steps in this order: the eight-case policy output, the seeded dashboard, tenant-a versus tenant-b row isolation, and the dashboard audit metadata. Close by showing `npm test` and the line reporting all tests passed.
 
 ## Policy bundle and simulation
 
