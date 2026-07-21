@@ -69,3 +69,25 @@ test('CLI emits JSON for success and exits non-zero with controlled stderr for d
   assert.equal(denied.stdout, '');
   assert.match(denied.stderr, /denied|purpose/i);
 });
+
+test('CLI emits a readable summary with --pretty', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'sentiql-sim-pretty-'));
+  const fixturePath = join(directory, 'allow.json');
+  await writeFile(fixturePath, JSON.stringify({ principal, request: allowRequest }), 'utf8');
+  const cliPath = join(projectRoot, 'bin', 'policy-simulate.mjs');
+
+  const pretty = spawnSync(process.execPath, [
+    cliPath,
+    '--bundle', bundlePath,
+    '--fixture', fixturePath,
+    '--pretty',
+  ], { encoding: 'utf8' });
+
+  assert.equal(pretty.status, 0);
+  assert.match(pretty.stdout, /Decision: ALLOW/);
+  assert.match(pretty.stdout, /Resource: crm\.support_cases/);
+  assert.match(pretty.stdout, /Scope: tenant/);
+  assert.match(pretty.stdout, /Allowed fields: id, status/);
+  assert.equal(pretty.stdout.trimStart().startsWith('{'), false);
+  assert.equal(pretty.stderr, '');
+});

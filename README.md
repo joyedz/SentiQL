@@ -65,10 +65,10 @@ The fastest reproducible demo has three parts: an offline policy decision, the P
 This command needs no database, token, network, or running server:
 
 ```sh
-npm run policy:simulate -- --bundle ./config/policy.example.json --fixture ./fixtures/support-read.json
+npm run policy:simulate -- --bundle ./config/policy.example.json --fixture ./fixtures/support-read.json --pretty
 ```
 
-The output includes `decision: "allow"`, the policy version/hash, the tenant row scope, the permitted fields, and the maximum row count. To show fail-closed behavior, change the fixture's requested field or purpose and run the same command again; the command exits non-zero with a controlled denial.
+The `--pretty` flag prints a judge-friendly summary containing the decision, policy version/hash, tenant row scope, permitted fields, and maximum row count. Omit `--pretty` when a machine-readable JSON response is needed. To show fail-closed behavior, change the fixture's requested field or purpose and run the same command again; the command exits non-zero with a controlled denial.
 
 ### 2. Show tenant isolation in PostgreSQL
 
